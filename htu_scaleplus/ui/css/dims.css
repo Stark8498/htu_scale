@@ -1,0 +1,134 @@
+html{
+  height: 100%;
+  overflow: hidden;
+}
+body{
+  height: 100%;
+  margin: 5px;
+  font-family: Arial;
+  overflow: hidden;
+  font-size: 10pt;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+/* Track */
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+ 
+/* Handle */
+::-webkit-scrollbar-thumb {
+  background: rgba(144,147,153,.3)
+}
+
+/* Handle on hover */
+::-webkit-scrollbar-thumb:hover {
+  background: #c8c8c8; 
+}
+
+.el-divider--horizontal {
+  display: block;
+  height: 1px;
+  width: 100%;
+  margin: 10px 0;
+}
+
+.element {
+  margin: 2px;
+}
+
+.el-main {
+  padding: 5px 5px;
+}
+
+.el-header {
+  padding: 10px 0px;
+}
+
+.el-footer {
+  padding: 0;
+}
+
+/* scenes */
+.right-control{
+  float: right;
+}
+.entity-name{
+  font-weight: bold;
+}
+
+.el-select{
+  width: 100%;
+
+}
+.el-select-dropdown__item {
+  padding-left: 5px;
+  height: 22px;
+  line-height: 22px;
+}
+
+.el-select-group .el-select-dropdown__item {
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+/* input */
+.el-input--mini .el-input__inner {
+  height: 24px !important;
+  line-height: 24px;
+  padding: 0 5px;
+}
+
+.el-button.is-circle {
+  border-radius: 0;
+  border: none;
+  padding: 5px;
+}
+
+.el-button-group>.el-button:first-child:last-child.is-circle {
+  border-radius: 0;
+}
+
+.center-items{
+  display: flex;
+  justify-content: center;
+  align-items: center; 
+}
+
+.fixed-footer {
+  position: fixed;
+  bottom: 0;
+  width: 100%;
+}
+
+.divide-bottom{
+  border-bottom: 1px solid #DCDFE6;
+}
+
+.el-slider__runway {
+  margin: 8px 0;
+}
+.el-input-number--mini {
+  width: 100%;
+}
+
+.el-table .warning-row {
+  background: oldlace;
+}
+
+.el-table .lenx {
+  background: #ffcccc;
+}
+
+.el-table .leny {
+  background: #d5ffbe;
+}
+.el-table .lenz {
+  background: #b7d6fd;
+}
+
+.el-table--mini td, .el-table--mini th {
+  padding: 2px 0;
+}

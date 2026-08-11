@@ -1,0 +1,109 @@
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="MSThemeCompatible" content="Yes" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    
+    <link rel="stylesheet" href="../css/style/theme/index.css">
+    <link rel="stylesheet" type="text/css" href="../css/dims.css">
+
+    <style></style>
+  </head>
+
+  <body>
+    <div id="app" style="height: 100%;">
+      <template>
+        <el-card :body-style="{padding: '5px'}">
+          <div style="display: flex;">
+            <h2 style="margin: 5px; flex-grow: 1;">Favorite Dimensions</h2>
+            <el-button-group>
+              <el-button type="primary" icon="el-icon-refresh-left" size="mini" @click="refresh()" title="Refresh"></el-button>
+              <el-button type="primary" icon="el-icon-upload2" size="mini" @click="exportDims()" title="Export (.csv)"></el-button>
+              <el-button type="primary" icon="el-icon-download" size="mini" @click="loadDims()" title="Import (.csv)"></el-button>
+            </el-button-group>
+          </div>
+        </el-card>
+      </template>
+      <template  v-if="active">
+        <el-table 
+          :data="table"
+          size="mini"
+          :style="{ overflow: 'auto', height: 'calc(100% - 90px)' }"
+          :row-class-name="tableRowClassName">
+          <h3 slot="empty">
+            <template v-if="selected_objects > 1">
+              No common dimensions
+            </template>
+            <template v-else>
+              No dimensions
+            </template>
+          </h3>
+          <!-- <el-table-column type="index">
+          </el-table-column> -->
+          <el-table-column
+            prop="len"
+            label="Length"
+            sortable
+            width="100">
+            <template slot-scope="scope">
+              <el-select
+                v-model="scope.row.len"
+                filterable
+                allow-create
+                size="mini"
+                placeholder="Choose Len">
+                <el-option
+                  v-for="len in lens"
+                  :label="len.name"
+                  :value="len.value">
+                </el-option>
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="dim"
+            sortable
+            label="Dimension">
+            <template slot-scope="scope">
+              <el-input v-model="scope.row.dim" size="mini" @change="changeDim(scope.row)" clearable placeholder="Enter dim"> </el-input>
+            </template>
+          </el-table-column>
+          <el-table-column
+            align="center"
+            width="110"
+            label="">
+            <template slot-scope="scope">
+              <el-button-group>
+                <el-button :disabled="selected_objects > 1" @click="setDim(scope.row)" size="mini" title="Aplly Dimension"><i class="el-icon-caret-right"></i></el-button>
+                <el-button @click="removeRow(scope)" size="mini"><i class="el-icon-delete"></i></el-button>
+              </el-button-group>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div style="display: flex; justify-content: center; margin: 5px;">
+          <el-button-group>
+            <el-button type="primary" @click="saveDims()" size="mini"><i class="el-icon-check"></i> Save</el-button>
+            <el-button type="primary"  @click="newRow()" size="mini"> <i class="el-icon-circle-plus"> </i> Add</el-button>
+            <el-button type="primary" @click="clearAll()" size="mini" style="margin-left: 0;"> <i class="el-icon-delete"></i> Remove All</el-button>
+          </el-button-group>
+        </div>
+      </template>
+      <template v-else>
+        <h3>Scale Tool is not activated!</h3>
+      </template>
+    </div>
+  </body>
+
+  <!-- import JavaScript -->
+  <script type="text/javascript" src="../js/vue.js"></script>
+  <!-- import Element -->
+  <!-- <script src="https://unpkg.com/element-ui@2.11.1/lib/index.js"></script> -->
+
+  <script type="text/javascript" src="../js/element_ui.js"></script>
+  <script type="text/javascript" src="../js/element_ui_en.js"></script>
+  <script type="text/javascript" src="../js/dims.js" ></script>
+
+</html>
