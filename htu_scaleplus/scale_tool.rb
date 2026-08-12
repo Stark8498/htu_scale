@@ -6,62 +6,61 @@ end
     tool.active = status
     Sketchup.active_model.active_view.invalidate
   end
+  # Kept as the public names other files already call (dims.rb, set_dim_value);
+  # DimFavorites owns the storage rules now.
   def self.save_dim_to_object(len, value, object)
-    begin
-      dims = object_dims(object, len)
-      unless dims.include?(value)
-        dims << value
-      end
-      dims.sort!
-      object.set_attribute(PLUGIN, "#{len}_dims", dims)
-      object.definition.set_attribute(PLUGIN, "#{len}_dims", dims)
-    rescue => exception
-      p(exception)
-    end
+    DimFavorites.add(object, len, [value])
   end
   def self.object_dims(object, len)
-    if object.is_a?(Sketchup::ComponentDefinition)
-      dims = object.get_attribute(PLUGIN, "#{len}_dims", [])
-    else
-      dims = object.definition.get_attribute(PLUGIN, "#{len}_dims", [])
-    end
-    dims
+    DimFavorites.list(object, len)
   end
   def self.clear_object_dims(object, len)
-    object.set_attribute(PLUGIN, "#{len}_dims", [])
-    if object.is_a?(Sketchup::ComponentDefinition)
-      return
-    end
-    object.definition.set_attribute(PLUGIN, "#{len}_dims", [])
+    DimFavorites.clear(object, len)
   end
   class ScalePPTool < Tool
     attr_reader(:data_dims)
     attr_accessor(:on_push_tool)
-    attr_accessor(:highlight_center)
     attr_reader(:bb_data)
-    attr_reader(:pet_toolbar)
+    # Axis ("lenx"/"leny"/"lenz") whose dimension is locked for VCB entry, or
+    # nil. The axis is held rather than the dim itself because @data_dims is
+    # rebuilt whenever the camera moves -- a held hash would carry stale
+    # geometry, and orbiting mid-entry would then scale by the wrong amount.
+    attr_reader(:locked_axis)
+    # What has been typed into the locked dimension, and whether the keyboard
+    # could be mirrored at all. nil buffer = nothing typed yet = drawn selected.
+    attr_reader(:edit_buffer, :edit_echo)
+    # Text-selection colours for the in-place editor. Deliberately not the
+    # dimension's own red/green/blue: a filled badge in the axis colour is what
+    # the heavy locked outline used to look like, and it read as decoration
+    # rather than as selected text. A neutral highlight blue reads as selection
+    # on all three axes.
+    EDIT_FILL  = [51, 133, 224].freeze
+    EDIT_TEXT  = [255, 255, 255].freeze
+    EDIT_CARET = [40, 40, 40].freeze
     def initialize(overlay)
       super
       @overlay = overlay
       @tool_name = "ScaleTool"
       @tool_state = 0
       @on_push_tool = false
-      @pet_toolbar = PetToolbar.new(self)
-      @pet_toolbar.command_on_hover do |cmd|
-        unless active_itself?
-          next
-        end
-        @highlight_center = cmd.ui_command.menu_text.gsub("Behavior Scale ", "")
-      end
-      @pet_toolbar.command_on_blur do
-        @highlight_center = nil
-      end
+      @locked_axis = nil
+      @edit_buffer = nil
+      @edit_echo = true
       @model = Sketchup.active_model
       @selection = @model.selection
       @view = @model.active_view
     end
+    # Compared against @active, not against #active?.
+    #
+    # #active? is `@active || this tool is on the stack`, so while the tool held
+    # the stack `active = true` saw "already true" and returned without ever
+    # setting the flag. The tool then drew only for as long as it stayed on top of
+    # the stack, and a camera tool taking that spot made it vanish. Normalised to
+    # true/false first because @active starts out nil, and `false == nil` is not
+    # the no-op the old comparison happened to make it.
     def active=(status)
-      if status == active?
+      status = status ? true : false
+      if status == (@active ? true : false)
         return
       end
       @active = status
@@ -71,95 +70,6 @@ end
         deactivate(Sketchup.active_model.active_view)
       end
       DimsUI.toggle_active(active?)
-    end
-    def place_menu
-      rect = @pet_toolbar.menu.items[0].bounds.map do |pt|
-  pt.to_a[0..1]
-end
-      unless @bb_points
-        return
-      end
-      container = [[0, 0], [@view.vpwidth, 0], [@view.vpwidth, @view.vpheight], [0, @view.vpheight]]
-      d = RadialMenu.pie_size * 2
-      pts = @bb_points
-      pts = pts + @bb_data[:centers]
-      pts = pts + @bb_lines.map do |l|
-  midpoint(l)
-end
-      existing_rects = pts.map do |pt|
-  x, y = @view.screen_coords(pt).to_a[0..1]
-  r = square_from_center(x, y, d)
-  r
-end
-      @existing_rects = existing_rects.map do |r|
-  r.map do |pt|
-    Geom::Point3d.new(pt)
-  end
-end
-      ranger = -75..95
-      rect_w = rect[3][0] - rect[0][0]
-      rect_h = rect[1][1] - rect[0][1]
-      rect_center_x = rect[0][0] + rect_w / 2
-      rect_center_y = rect[0][1] + rect_h / 2
-      rect_half_width = rect_w / 2
-      rect_half_height = rect_h / 2
-      @new_rects = {}
-      radius = RadialMenu.pie_size * 5
-      fit = false
-      new_rect_points = nil
-      c = 0
-      until fit || (radius > @view.vpwidth / 2 || c > 100)
-        ranger.step(15) do |angle|
-          circle_center_x = rect_center_x + radius * Math.cos(angle * Math::PI / 180)
-          circle_center_y = rect_center_y + radius * Math.sin(angle * Math::PI / 180)
-          new_rect_points = [[circle_center_x - rect_half_width, circle_center_y - rect_half_height], [circle_center_x + rect_half_width, circle_center_y - rect_half_height], [circle_center_x + rect_half_width, circle_center_y + rect_half_height], [circle_center_x - rect_half_width, circle_center_y + rect_half_height]]
-          fit = can_fit?(new_rect_points, existing_rects, container)
-          @new_rects[new_rect_points.map do |pt|
-  Geom::Point3d.new(pt)
-end] = fit
-          if fit
-            break
-          end
-          c = c + 1
-        end
-        radius = radius + RadialMenu.pie_size * 1.5
-      end
-      if fit
-        return new_rect_points
-      end
-      false
-    end
-    def menu_can_fit?
-      unless @bb_points
-        return
-      end
-      rect = @pet_toolbar.menu.items[0].bounds.map do |pt|
-  pt.to_a[0..1]
-end
-      container = [[0, 0], [@view.vpwidth, 0], [@view.vpwidth, @view.vpheight], [0, @view.vpheight]]
-      d = RadialMenu.pie_size * 2
-      pts = @bb_points
-      pts = pts + @bb_data[:centers]
-      pts = pts + @bb_lines.map do |l|
-  midpoint(l)
-end
-      existing_rects = pts.map do |pt|
-  x, y = @view.screen_coords(pt).to_a[0..1]
-  r = square_from_center(x, y, d)
-  r
-end
-      can_fit?(rect, existing_rects, container)
-    end
-    def can_fit?(rect, existing_rects, container)
-      if rect[2][0] > container[2][0] || (rect[2][1] > container[2][1] || (rect[0][0] < container[0][0] || rect[0][1] < container[0][1]))
-        return false
-      end
-      existing_rects.each do |existing_rect|
-        if !(rect[2][0] <= existing_rect[0][0] || (rect[0][0] >= existing_rect[2][0] || (rect[2][1] <= existing_rect[0][1] || rect[0][1] >= existing_rect[2][1])))
-          return false
-        end
-      end
-      true
     end
     def active_itself?
       @model.tools.active_tool == self
@@ -172,42 +82,20 @@ end
       else
         reset
         redraw(@view)
-        update_menu_position
       end
       @on_call_back = false
-    end
-    def update_menu_position
-      if @on_call_back && menu_can_fit?
-        return
-      else
-        menu_position = @overlay.mouse.clone
-        menu_position.x += RadialMenu.size * 1.5
-        menu_position.y += RadialMenu.size * 1.5
-        @pet_toolbar.menu.show(menu_position)
-        rect = place_menu
-        if rect
-          menu_position = rect[0]
-          menu_position.x += RadialMenu.size / 2 + RadialMenu.size / 6
-          menu_position.y += RadialMenu.size / 2 + RadialMenu.size / 6
-        else
-          menu_position = @overlay.mouse.clone
-          menu_position.x += RadialMenu.size * 1.5
-          menu_position.y += RadialMenu.size * 1.5
-        end
-      end
-      @pet_toolbar.menu.show(menu_position)
     end
     def reset
       @dims = nil
       @data_dims = nil
       @store_bb = nil
       @state = nil
-      @highlight_center = nil
     end
     def deactivate(view)
       if @on_push_tool
         @on_push_tool = false
       end
+      unlock_axis
       @selected = []
       store_bounds_points
     end
@@ -222,9 +110,6 @@ end
             dim[:hover] = false
           end
         end
-        @pet_toolbar.visible = false
-      else
-        @pet_toolbar.visible = true
       end
       UI.start_timer(0.0099999999983992893, false) do
         redraw(@view)
@@ -288,7 +173,108 @@ end
     def on_hover?
       @data_dims && @data_dims.find do |d|
   d && d[:hover]
-end || @pet_toolbar.on_hover?
+end
+    end
+    # Padding around the selection's screen box, in pixels. SketchUp's scale
+    # grips all sit ON that box, and they stick out past the silhouette.
+    GRIP_MARGIN = 24
+    # Splits the viewport in two, and everything about retargeting follows from
+    # it: inside the padded box the click may be a grip, so it belongs to the
+    # Scale tool and this tool must stay off the stack. Outside it there is no
+    # grip to hit, so the click is safely ours to read as "scale that one
+    # instead" or "deselect".
+    #
+    # A screen-space box beats testing each grip position: SketchUp decides
+    # where its grips go, and the box is the one thing guaranteed to contain
+    # them however it decides.
+    def outside_grips?(x, y, view)
+      points = @bb_data && @bb_data[:points]
+      unless points && !points.empty? && view
+        return true
+      end
+      xs = []
+      ys = []
+      points.each do |pt|
+        sp = view.screen_coords(pt)
+        xs << sp.x
+        ys << sp.y
+      end
+      x < xs.min - GRIP_MARGIN || x > xs.max + GRIP_MARGIN ||
+        y < ys.min - GRIP_MARGIN || y > ys.max + GRIP_MARGIN
+    end
+    # Whether this tool wants the next click. Only in state 0: mid-drag the
+    # Scale tool owns the mouse wherever it goes.
+    def own_click?
+      !!@own_click
+    end
+    def wants_push?
+      on_hover? || own_click?
+    end
+    # The top-level group or instance under the cursor, or nil over raw
+    # geometry and empty space. Only these can be scaled as a unit, which is
+    # what the whole plugin is about.
+    def pick_object(x, y, view)
+      helper = view.pick_helper
+      helper.do_pick(x, y)
+      entity = helper.best_picked
+      unless entity.respond_to?(:definition)
+        return
+      end
+      if entity.respond_to?(:locked?) && entity.locked?
+        return
+      end
+      entity
+    rescue StandardError => e
+      p(e)
+      nil
+    end
+    # Click outside the grips: switch the scale straight to whatever was
+    # clicked, or drop the selection on empty space and wait for the next one.
+    # Saves leaving the tool, selecting, and pressing S again for every object.
+    def retarget(x, y, view)
+      entity = pick_object(x, y, view)
+      selection = @model.selection
+      if entity.nil?
+        if selection.empty?
+          return
+        end
+        selection.clear
+      elsif selection.length == 1 && selection.to_a.first == entity
+        # A click on what is already being scaled changes nothing.
+        return
+      else
+        selection.clear
+        selection.add(entity)
+      end
+      redraw(view)
+      view.invalidate
+      entity
+    end
+    def hovered_dim
+      unless @data_dims
+        return
+      end
+      @data_dims.find do |d|
+        d && d[:hover]
+      end
+    end
+    # Which model axis a dimension runs along. The parallel? chain used to be
+    # repeated at every call site; the menu and the VCB path both need it.
+    def dim_axis(dim)
+      unless dim && dim[:line] && @tr_bb
+        return
+      end
+      vec = dim[:line][1] - dim[:line][0]
+      unless vec.valid?
+        return
+      end
+      if vec.parallel?(@tr_bb.xaxis)
+        "lenx"
+      elsif vec.parallel?(@tr_bb.yaxis)
+        "leny"
+      elsif vec.parallel?(@tr_bb.zaxis)
+        "lenz"
+      end
     end
     def onMouseMove(flags, x, y, view)
       @mouse = [x, y]
@@ -307,10 +293,12 @@ end || @pet_toolbar.on_hover?
           end
         end
       end
-      if @pet_toolbar
-        @pet_toolbar.onMouseMove(flags, x, y, view)
-      end
-      if @on_push_tool && !on_hover?
+      @own_click = @tool_state == 0 && outside_grips?(x, y, view)
+      # While an axis is locked the tool must survive the cursor leaving the
+      # dimension text, otherwise a nudge of the mouse would discard whatever
+      # the user has typed into the VCB. Away from the grips it stays on the
+      # stack too, so the next click can retarget instead of being swallowed.
+      if @on_push_tool && !on_hover? && !@locked_axis && !own_click?
         return call_back
       end
       unless bounds_changed?
@@ -324,55 +312,150 @@ end || @pet_toolbar.on_hover?
       @on_call_back = true
       @model.tools.pop_tool
     end
+    # Clicking a dimension locks its axis and hands the VCB over, replacing the
+    # old modal "Resize Entity" inputbox. Clicking anywhere else releases.
     def onLButtonDown(flags, x, y, view)
-      if @pet_toolbar
-        @pet_toolbar.onLButtonDown(flags, x, y, view)
+      dim = hovered_dim
+      if dim
+        return lock_axis(dim_axis(dim), dim)
       end
-      if @pet_toolbar.on_hover?
+      unlock_axis
+      # No pop here any more. After retargeting, the cursor is over the new
+      # selection, and the next mouse move pops this tool so the Scale tool
+      # gets its grips back. Popping now would just make that a round trip.
+      retarget(x, y, view)
+    end
+    def lock_axis(axis, dim = nil)
+      unless axis
         return
       end
-      unless @data_dims
-        return call_back
+      @locked_axis = axis
+      # nil means "nothing typed yet", which is what draws the number selected.
+      # The first keystroke turns it into a string and the selection gives way
+      # to the typed text, the way replacing a selection works in a text field.
+      @edit_buffer = nil
+      @edit_echo = true
+      dim ||= dim_for_axis(axis)
+      length = dim && dim[:line].first.distance(dim[:line].last)
+      Sketchup.set_status_text("Len#{axis[-1].upcase}", SB_VCB_LABEL)
+      Sketchup.set_status_text(length ? length.to_s : "", SB_VCB_VALUE)
+      Sketchup.set_status_text("Type a length and press Enter. Esc to cancel.", SB_PROMPT)
+      @view.invalidate
+    end
+    def unlock_axis
+      unless @locked_axis
+        return
       end
-      dim = @data_dims.find do |d|
-  d && d[:hover]
-end
-      unless dim
-        return call_back
-      end
-      line = dim[:line]
-      vec = line[1] - line[0]
-      len = "Len" + (vec.parallel?(@tr_bb.xaxis) ? "X" : vec.parallel?(@tr_bb.yaxis) ? "Y" : vec.parallel?(@tr_bb.zaxis) ? "Z" : "")
-      prompts = ["Resize #{len}"]
-      len = dim[:line].first.distance(dim[:line].last)
-      defaults = [len]
-      title = "Resize Entity"
-      if IS_WIN
-        id = UI.start_timer(0.099999999976716936, false) do
-  UI.stop_timer(id)
-  r = UI.inputbox(prompts, defaults, title)
-  click_dim(dim, len, r)
-end
-      else
-        r = UI.inputbox(prompts, defaults, title)
-        click_dim(dim, len, r)
+      @locked_axis = nil
+      @edit_buffer = nil
+      @edit_echo = true
+      Sketchup.set_status_text("", SB_VCB_LABEL)
+      Sketchup.set_status_text("", SB_VCB_VALUE)
+      Sketchup.set_status_text("", SB_PROMPT)
+      if @view
+        @view.invalidate
       end
     end
-    def click_dim(dim, len, ipbox)
-      unless ipbox
-        return call_back
+    def dim_for_axis(axis)
+      unless @data_dims
+        return
       end
-      new_len = ipbox[0]
-      if new_len == 0
-        return call_back
+      @data_dims.find do |d|
+        d && dim_axis(d) == axis
       end
-      if new_len == len
-        return call_back
+    end
+    # VCB entry. An unreadable or non-positive value keeps the lock so the user
+    # can simply retype instead of having to re-click the dimension.
+    def onUserText(text, view = @view)
+      unless @locked_axis
+        return
       end
+      begin
+        value = text.to_s.strip.to_l
+      rescue StandardError
+        value = nil
+      end
+      if value.nil? || value.to_f <= 0
+        UI.beep
+        return lock_axis(@locked_axis)
+      end
+      apply_dim_value(@locked_axis, value)
+    end
+    def onCancel(reason, view)
+      unlock_axis
+      if @on_push_tool
+        call_back
+      end
+    end
+    # Virtual-key -> character, for echoing what is typed onto the dimension
+    # itself. Only the keys a length can be written with are listed; everything
+    # else switches the echo off rather than guessing (see #onKeyDown).
+    EDIT_KEYS = {
+      8 => :backspace,
+      46 => :delete,
+      48 => "0", 49 => "1", 50 => "2", 51 => "3", 52 => "4",
+      53 => "5", 54 => "6", 55 => "7", 56 => "8", 57 => "9",
+      96 => "0", 97 => "1", 98 => "2", 99 => "3", 100 => "4",
+      101 => "5", 102 => "6", 103 => "7", 104 => "8", 105 => "9",
+      110 => ".", 190 => ".", 188 => ",",
+      109 => "-", 189 => "-",
+      106 => "*", 111 => "/",
+    }.freeze
+    # Keys that belong to SketchUp, not to the edit buffer: modifiers, Enter,
+    # Esc, arrows, function keys. Listing them stops a harmless Shift press from
+    # tripping the "unknown key" bail-out below.
+    EDIT_IGNORED = [9, 13, 16, 17, 18, 20, 27, 33, 34, 35, 36,
+                    37, 38, 39, 40, 45, 91, 92, 93, 144, 145].freeze
+    # The dimension is the text field while an axis is locked, so what the user
+    # types has to appear on it. SketchUp gives no way to read the VCB as it is
+    # being filled, so the keystrokes are mirrored here.
+    #
+    # This is a PREVIEW ONLY -- onUserText applies the VCB's own text on Enter,
+    # so a mismatched echo can never resize by the wrong amount. Key codes are
+    # virtual keys, which do not track the keyboard layout: on a layout where a
+    # digit needs Shift, or under an IME, the mirror would lie. So an
+    # unrecognised key gives up on the echo for the rest of the entry and the
+    # VCB is left as the only display, rather than showing something wrong.
+    def onKeyDown(key, repeat, flags, view)
+      unless @locked_axis && @edit_echo
+        return
+      end
+      entry = edit_char(key)
+      if entry.nil?
+        unless EDIT_IGNORED.include?(key) || (112..135).cover?(key)
+          @edit_echo = false
+          view.invalidate
+        end
+        return
+      end
+      buffer = @edit_buffer || ""
+      if entry == :backspace
+        buffer = buffer[0...-1].to_s
+      elsif entry == :delete
+        buffer = ""
+      else
+        buffer += entry
+      end
+      @edit_buffer = buffer
+      view.invalidate
+      nil
+    end
+    # Letters are their ASCII uppercase as virtual keys, so unit suffixes can be
+    # mirrored too. Separate from EDIT_KEYS to keep that table about digits.
+    def edit_char(key)
+      if (65..90).cover?(key)
+        return key.chr.downcase
+      end
+      EDIT_KEYS[key]
+    end
+    # The single apply path, shared by the VCB and by the saved sizes in the
+    # context menu.
+    def apply_dim_value(axis, value)
+      axis = axis.to_s
+      unlock_axis
       @model.start_operation("Resize", true)
-      set_dim_value(dim, new_len)
+      set_dim(axis, value)
       @model.commit_operation
-      dc_redraw
       Sketchup.active_model.select_tool(nil)
       Sketchup.send_action("selectScaleTool:")
     end
@@ -487,9 +570,6 @@ end
       end
     end
     def onLButtonUp(flags, x, y, view)
-      if @pet_toolbar
-        @pet_toolbar.onLButtonUp(flags, x, y, view)
-      end
     end
     def getExtents
       bb = Sketchup.active_model.bounds
@@ -747,7 +827,18 @@ end
       end
       point = pj_point.offset(vec, dim_offset / 4)
       options[:position] = point
-      char_loops = @text_typeface.convert(text.to_s, options)
+      geometry = text_geometry(view, text.to_s, options)
+      unless geometry
+        return
+      end
+      {:line => dim, :extensions => extensions, :options => options}.merge(geometry)
+    end
+    # Glyph loops, triangles and the surrounding box for one string, laid out in
+    # the frame `options` describes. Split out of parse_dimemsion_geometry so the
+    # in-place editor can re-render a dimension with the text being typed
+    # without redoing the dimension line, offsets and orientation.
+    def text_geometry(view, string, options)
+      char_loops = @text_typeface.convert(string, options)
       triangles = []
       char_loops.each do |_i, loops|
         unless loops
@@ -755,10 +846,14 @@ end
         end
         triangles << Geom.tesselate(loops.first, *loops[1..-1])
       end
+      pts = triangles.flatten
+      if pts.empty?
+        return
+      end
       direction = options[:direction]
       normal = options[:normal]
       tr = Geom::Transformation.axes(options[:position], direction, normal.cross(direction), normal)
-      pts = triangles.flatten.map do |pt|
+      pts = pts.map do |pt|
   pt.transform(tr.inverse)
 end
       bb = Geom::BoundingBox.new.add(pts)
@@ -773,171 +868,31 @@ end
       bb_text_2d = bb_text.map do |pt|
   view.screen_coords(pt)
 end
-      {:line => dim, :extensions => extensions, :text_char_loops => char_loops, :text_triangles => triangles, :bb_text => bb_text, :bb_text_2d => bb_text_2d, :options => options}
+      {:text_char_loops => char_loops, :text_triangles => triangles, :bb_text => bb_text, :bb_text_2d => bb_text_2d}
+    rescue StandardError => e
+      # Reached from #draw on every frame while typing, where a raise would
+      # turn one bad glyph into a viewport that stops redrawing. Callers treat
+      # nil as "no geometry": the dimension is skipped, or the stored label is
+      # kept and only the preview is lost.
+      p(e)
+      nil
     end
-    def getMenu(menu, flags, x, y, view)
-      dim = @data_dims.find do |d|
-  d && d[:hover]
+# The context menu only exists on a dimension: the tool is pushed on hover
+# and pops as soon as the cursor leaves, so there is no other state it can
+# be opened from. DimMenu owns the contents.
+def getMenu(menu, flags, x, y, view)
+  dim = hovered_dim
+  unless dim
+    return true
+  end
+  axis = dim_axis(dim)
+  unless axis
+    return true
+  end
+  length = dim[:line].first.distance(dim[:line].last)
+  DimMenu.build(menu, self, selected_object, axis, length)
+  true
 end
-      if dim
-        dimGetMenu(dim, menu, flags, x, y, view)
-      else
-        submenu = menu.add_submenu("UI Scale Factor")
-        submenu.add_item("Auto Scale Factor") do
-          PLUGIN.verify_ui_scale
-        end
-        [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].each do |scale|
-          cmd = submenu.add_item("x#{scale}") do
-  PLUGIN.scale_factor = scale
-  view.invalidate
-end
-          submenu.set_validation_proc(cmd) do
-            if PLUGIN::SCALE_FACTOR == scale
-              MF_CHECKED
-            else
-              MF_UNCHECKED
-            end
-          end
-        end
-      end
-      true
-    end
-    def dimGetMenu(dim, menu, flags, x, y, view)
-      object = selected_object
-      line = dim[:line]
-      vec = line[1] - line[0]
-      len = line[0].distance(line[1])
-      if vec.parallel?(@tr_bb.xaxis)
-        name = "lenx"
-      elsif vec.parallel?(@tr_bb.yaxis)
-        name = "leny"
-      elsif vec.parallel?(@tr_bb.zaxis)
-        name = "lenz"
-      end
-      lens = object ? object_dims(object, name) : []
-      if object && dim
-        lens_empty = lens.empty?
-        if lens.empty?
-          lens << (len * 0.5).to_l
-          lens << (len * 2).to_l
-          lens.each do |l|
-            menu.add_item("#{l} (x#{(l / len).round(1)})") do
-              @model.start_operation("Resize", true)
-              set_dim_value(dim, l)
-              @model.commit_operation
-              dc_redraw
-              view.model.select_tool(nil)
-              Sketchup.send_action("selectScaleTool:")
-            end
-          end
-        else
-          cmd = menu.add_item("Favorite Dimensions") do
-end
-          menu.set_validation_proc(cmd) do
-            MF_GRAYED
-          end
-          lens.each do |l|
-            c = menu.add_item(l.to_s) do
-  @model.start_operation("Resize", true)
-  set_dim_value(dim, l)
-  @model.commit_operation
-  dc_redraw
-  view.model.select_tool(nil)
-  Sketchup.send_action("selectScaleTool:")
-end
-            menu.set_validation_proc(c) do
-              if l == len
-                MF_CHECKED
-              else
-                MF_ENABLED
-              end
-            end
-          end
-        end
-        if object
-          menu.add_item("Show Manager") do
-            DimsUI.show_dialog
-          end
-        end
-        same_dc = same_dc_definition(object.definition)
-        same_dc << object.definition
-        if same_dc.length > 0
-          dc_lens = []
-          same_dc.each do |d|
-            paths = definition_paths(d)
-            paths.each do |path|
-              tr = Sketchup::InstancePath.new(path).transformation
-              o = path.last
-              bb = o.definition.bounds
-              len_lines = bounds_center_lines(bb, tr)
-              if vec.parallel?(@tr_bb.xaxis)
-                len_line = len_lines[0]
-              elsif vec.parallel?(@tr_bb.yaxis)
-                len_line = len_lines[1]
-              else
-                len_line = len_lines[2]
-              end
-              l = len_line[0].distance(len_line[1])
-              unless dc_lens.include?(l)
-                dc_lens << l
-              end
-            end
-          end
-          dc_lens = dc_lens - lens
-          dc_lens.delete(len)
-          if dc_lens.length > 0
-            menu.add_separator
-            cmd = menu.add_item("Referenced Dimensions") do
-end
-            menu.set_validation_proc(cmd) do
-              MF_GRAYED
-            end
-            dc_lens.each do |l|
-              menu.add_item("#{l} (in model)") do
-                @model.start_operation("Resize", true)
-                set_dim_value(dim, l)
-                @model.commit_operation
-                dc_redraw
-                view.model.select_tool(nil)
-                Sketchup.send_action("selectScaleTool:")
-              end
-            end
-          end
-        end
-        menu.add_separator
-        smenu = menu.add_submenu("Text size")
-        c = smenu.add_item("Small") do
-  PLUGIN.settings[:dim_text_size] = DIM_SMALL
-end
-        smenu.set_validation_proc(c) do
-          if PLUGIN.settings[:dim_text_size] == DIM_SMALL
-            MF_CHECKED
-          else
-            MF_ENABLED
-          end
-        end
-        c = smenu.add_item("Medium") do
-  PLUGIN.settings[:dim_text_size] = DIM_MEDIUM
-end
-        smenu.set_validation_proc(c) do
-          if PLUGIN.settings[:dim_text_size] == DIM_MEDIUM
-            MF_CHECKED
-          else
-            MF_ENABLED
-          end
-        end
-        c = smenu.add_item("Large") do
-  PLUGIN.settings[:dim_text_size] = DIM_LARGE
-end
-        smenu.set_validation_proc(c) do
-          if PLUGIN.settings[:dim_text_size] == DIM_LARGE
-            MF_CHECKED
-          else
-            MF_ENABLED
-          end
-        end
-      end
-    end
     def selected_object
       s = Sketchup.active_model.selection.to_a.reject do |o|
   o.respond_to?(:locked?) && o.locked?
@@ -987,18 +942,27 @@ end
         if PLUGIN.show_dim?
           draw_dimensions(view)
         end
-        if @existing_rects
-        end
-        if active_itself?
+        if draw_bounds?
           draw_selected_bounds(view)
         end
         if @tool_state == 0
           draw_scale_points(view)
         end
-        @pet_toolbar.draw(view)
       rescue => exception
         p(exception)
       end
+    end
+    # Whether to draw the Scale tool's own highlight on the bounding box -- the
+    # thick yellow one that says "this is what you are scaling". Without it the box
+    # drops back to the plain blue selection colour, which reads as having left the
+    # Scale tool.
+    #
+    # Same condition as the grip fill in #draw_scale_points, because it turned out
+    # to be the same loss: SketchUp drops the yellow AND the grips for every gesture
+    # it reports as a tool change. They were briefly given different conditions on
+    # the mistaken belief that pan kept its grips.
+    def draw_bounds?
+      active_itself? || PLUGIN.navigating?
     end
     def draw_selected_bounds(view)
       @bb_lines = bounds_lines(@bb, @tr_bb)
@@ -1007,10 +971,21 @@ end
       view.line_width = 3
       view.draw(GL_LINES, hack_point_draw(view, @bb_lines.flatten))
     end
+    # The gray outlines here sit exactly on top of SketchUp's own scale grips,
+    # which are green. Normally that is fine -- the green shows through the
+    # middle. But the moment this tool takes the stack, the Scale tool stops
+    # drawing and the green goes with it, leaving the outlines standing on
+    # nothing: the grips read as switched off just for moving the cursor away.
+    # So while this tool holds the stack it fills them in and stands in for the
+    # real ones. Pure green, read off SketchUp's own grips.
+    GRIP_FILL = [0, 255, 0].freeze
     def draw_scale_points(view)
       lines = bounds_center_lines(@bb, @tr_bb)
       entity = view.model.selection[0]
-      if !active_itself? && (view.model.selection.length == 1 && entity.respond_to?(:definition))
+      # The axis lock applies whether or not this tool holds the stack. It used
+      # to be skipped while it did, so taking the stack put back the two axes
+      # the lock had just taken away.
+      if view.model.selection.length == 1 && entity.respond_to?(:definition)
         no_scale_mask = entity.definition.behavior.no_scale_mask?
         x = 126
         y = 125
@@ -1024,10 +999,6 @@ end
           lines = [lines[2]]
         end
       end
-      points = @bb_points
-      points = points + @bb_lines.map do |l|
-  midpoint(l)
-end
       box_lines = {}
       d = view.pixels_to_model(8, @bb_center)
       view.line_width = 1
@@ -1043,120 +1014,49 @@ end
           box_lines[line] << box2d
         end
       end
-      draw_boxs = []
-      draw_lines = []
-      if @highlight_center
-        case @highlight_center
-        when "All"
-          points.each do |point|
-            box = create_box(point.to_a, d)
-            draw_boxs << box.map do |face|
-  face.map do |pt|
-    view.screen_coords(pt)
-  end
-end
-          end
-          box_lines.each do |line, bs|
-            bs.each do |b|
-              draw_boxs << b
-            end
-          end
-        when "XYZ"
-          box_lines.each do |line, box2ds|
-            vec_line = line[1] - line[0]
-            unless vec_line.valid?
-              next
-            end
-            if [@tr_bb.xaxis, @tr_bb.yaxis, @tr_bb.zaxis].any? do |v|
-  v.parallel?(vec_line)
-end
-              draw_boxs = draw_boxs + box2ds
-              draw_lines << line
-            end
-          end
-        when "X"
-          box_lines.each do |line, box2ds|
-            vec_line = line[1] - line[0]
-            unless vec_line.valid?
-              next
-            end
-            unless vec_line.parallel?(@tr_bb.xaxis)
-              next
-            end
-            draw_boxs = draw_boxs + box2ds
-            draw_lines << line
-          end
-        when "Y"
-          box_lines.each do |line, box2ds|
-            vec_line = line[1] - line[0]
-            unless vec_line.valid?
-              next
-            end
-            unless vec_line.parallel?(@tr_bb.yaxis)
-              next
-            end
-            draw_boxs = draw_boxs + box2ds
-            draw_lines << line
-          end
-        when "Z"
-          box_lines.each do |line, box2ds|
-            vec_line = line[1] - line[0]
-            unless vec_line.valid?
-              next
-            end
-            unless vec_line.parallel?(@tr_bb.zaxis)
-              next
-            end
-            draw_boxs = draw_boxs + box2ds
-            draw_lines << line
-          end
-        end
-        if !draw_boxs.empty?
-          view.line_stipple = ""
-          view.drawing_color = "gray"
-          draw_boxs.each do |b|
-            b.each do |f|
-              view.draw2d(GL_LINE_LOOP, f)
-            end
-          end
-          view.drawing_color = "lime"
-          view.draw2d(GL_QUADS, draw_boxs.flatten)
-        end
-        if !draw_lines.empty?
-          view.drawing_color = "gray"
-          view.line_stipple = "."
-          view.draw2d(GL_LINES, draw_lines.map do |l|
-  l.map do |pt|
-    view.screen_coords(pt)
-  end
-end.flatten)
-        end
-      else
-        box_lines.each do |line, box2ds|
-          view.line_stipple = ""
-          view.drawing_color = "gray"
-          box2ds.each do |box2d|
+      # Only when there is no real grip underneath to bury. Two cases where there
+      # is not: this tool holds the stack, which suspends the Scale tool, and any
+      # camera navigation, during which SketchUp draws no Scale grips at all.
+      #
+      # Measured, not reasoned -- and the reasoning was wrong twice. A pan hides
+      # the grips exactly like an orbit does: a capture of a pan shows only the gray
+      # outline drawn below, with nothing green inside it. A previous version
+      # narrowed this to orbit on the theory that pan kept its grips, and took them
+      # away for every pan.
+      #
+      # navigating? asks the live tool stack rather than the observer's flag, so the
+      # fill stops on the very frame the real grips come back -- the flag clears a
+      # tick late, which would leave a window with both drawn.
+      #
+      # A scroll-wheel zoom is not a tool change, so navigating? is false, nothing
+      # is painted and the real grips show through. That is what keeps this from
+      # ever burying a real grip, including the colour it turns under the cursor.
+      #
+      # Known limit, and it predates this: what gets drawn is the six face grips
+      # #bounds_center_lines produces. With a lock on that is exactly what
+      # SketchUp shows too, so the copy is faithful. With no lock the real tool
+      # shows all 27 and the other 21 are simply absent for the duration -- the
+      # same partial copy this already drew whenever it held the stack.
+      fill = active_itself? || PLUGIN.navigating?
+      box_lines.each do |line, box2ds|
+        view.line_stipple = ""
+        box2ds.each do |box2d|
+          if fill
+            view.drawing_color = GRIP_FILL
             box2d.each do |f|
-              view.draw2d(GL_LINE_LOOP, f)
+              view.draw2d(GL_POLYGON, f)
             end
           end
-          view.line_stipple = "."
-          view.draw2d(GL_LINES, line.map do |pt|
-  view.screen_coords(pt)
-end)
+          view.drawing_color = "gray"
+          box2d.each do |f|
+            view.draw2d(GL_LINE_LOOP, f)
+          end
         end
-      end
-    end
-    def draw_debug_place(view)
-      view.drawing_color = "red"
-      @existing_rects.each do |r|
-        view.draw2d(GL_POLYGON, r)
-      end
-      @new_rects.each do |r, fit|
-        view.drawing_color = fit ? "cyan" : "blue"
-        view.draw2d(GL_POLYGON, r)
-        view.drawing_color = "lime"
-        view.draw2d(GL_LINE_LOOP, r)
+        view.line_stipple = "."
+        view.drawing_color = "gray"
+        view.draw2d(GL_LINES, line.map do |pt|
+view.screen_coords(pt)
+end)
       end
     end
     def draw_dimensions(view)
@@ -1167,8 +1067,18 @@ end)
         unless dim
           next
         end
-        view.drawing_color = [255, 255, 255, 150]
-        view.draw2d(GL_POLYGON, dim[:bb_text_2d])
+        # A locked dimension doubles as the text field. Before the first
+        # keystroke the number is drawn selected; after it, the box carries what
+        # is being typed instead -- the same replace-the-selection behaviour a
+        # text field has. @edit_echo going false means the keyboard could not be
+        # mirrored safely, so it falls back to a plain unselected label.
+        locked = @locked_axis && dim_axis(dim) == @locked_axis
+        selected = locked && @edit_echo && @edit_buffer.nil?
+        typed = locked && @edit_echo && @edit_buffer && !@edit_buffer.empty?
+        box = typed && text_geometry(view, @edit_buffer, dim[:options]) || dim
+        text_color = selected ? EDIT_TEXT : dim[:color]
+        view.drawing_color = selected ? EDIT_FILL : [255, 255, 255, 150]
+        view.draw2d(GL_POLYGON, box[:bb_text_2d])
         lines = []
         if dim[:extensions] && !dim[:extensions].empty?
           lines = lines + dim[:extensions]
@@ -1193,22 +1103,45 @@ end, view, 5)
         view.draw2d(GL_LINES, lines.flatten.map do |pt|
   view.screen_coords(pt)
 end)
-        triangles = dim[:text_triangles]
+        view.drawing_color = text_color
+        # An emptied buffer must draw an empty field, not the old number: the
+        # box stays put but nothing is written in it.
+        triangles = @edit_buffer == "" && locked && @edit_echo ? [] : box[:text_triangles]
         view.draw2d(GL_TRIANGLES, triangles.flatten.map do |pt|
   view.screen_coords(pt)
 end)
         view.draw(GL_TRIANGLES, triangles.flatten)
-        unless dim[:hover]
+        if locked && @edit_echo && @edit_buffer
+          draw_caret(view, box[:bb_text_2d])
+        end
+        # The outline marks both the dimension under the cursor and the one
+        # locked for VCB entry. Same weight for both: the locked dimension used
+        # to be stroked at 4, and on a box only as wide as "870" that border
+        # nearly closed over the text and read as a filled badge.
+        unless dim[:hover] || locked
           next
         end
         view.drawing_color = dim[:color]
         view.line_stipple = ""
         view.line_width = 2
-        view.draw(GL_LINE_LOOP, dim[:bb_text])
-        view.draw2d(GL_LINE_LOOP, dim[:bb_text].map do |pt|
-  view.screen_coords(pt)
-end)
+        view.draw(GL_LINE_LOOP, box[:bb_text])
+        view.draw2d(GL_LINE_LOOP, box[:bb_text_2d])
       end
+    end
+    # A caret at the right edge of the field, so an empty box still reads as
+    # "waiting for input" rather than as a dimension that lost its label. Drawn
+    # in 2D from the screen-space box, which stays the trailing edge whichever
+    # way the text ended up facing.
+    def draw_caret(view, box2d)
+      xs = box2d.map(&:x)
+      ys = box2d.map(&:y)
+      x = xs.max - 2
+      pad = (ys.max - ys.min) * 0.15
+      view.line_stipple = ""
+      view.line_width = 2
+      view.drawing_color = EDIT_CARET
+      view.draw2d(GL_LINES, [Geom::Point3d.new(x, ys.min + pad, 0),
+                             Geom::Point3d.new(x, ys.max - pad, 0)])
     end
     def snap_text_normal_to_model_axes(vector)
       xaxis = @model.axes.xaxis

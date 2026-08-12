@@ -101,7 +101,14 @@ module TRINH_VAN_PHUC::HTU_ScalePlus::RadialMenu
     def tooltip=(text)
       @tooltip_color ||= "blue"
       options = {:size => 10 * PLUGIN::RadialMenu.scale_factor, :rounded => false, :color => @tooltip_color, :border_color => @tooltip_color}
-      @tooltip = Tooltip.new(text, {nil => options})
+      # DECOMPILER FIX: the AST rebuilt the argument list `(text, options)` as
+      # `(text, {nil => options})`, wrapping the options hash under a nil key.
+      # `LabelText#initialize` merges that straight into @options, and
+      # `View#text_bounds` rejects any non-Symbol key -> TypeError, which killed
+      # PetToolbar#load_commands -> ScalePPTool.new -> Overlay#start, leaving
+      # @dim_scale nil so no dimension ever drew. LabelText already has a
+      # `leader_type.is_a?(Hash)` branch for exactly this hash-as-2nd-arg form.
+      @tooltip = Tooltip.new(text, options)
       redraw_tooltip
     end
     def tree

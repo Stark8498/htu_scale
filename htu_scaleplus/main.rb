@@ -3,17 +3,60 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
     attr_accessor(:active)
     attr_reader(:cmd_reset, :cmd_xyz, :cmd_x, :cmd_y, :cmd_z, :cmd_dim, :cmds)
   end
+  BEHAVIOR_SECTION = "htu_behavior".freeze
+  BEHAVIOR_ALL = 0
+
+  # Which scale handles SketchUp shows, remembered machine-wide. The six toolbar
+  # buttons set it; #apply_behavior puts it on whatever gets selected next, which
+  # is what makes the choice outlive the component, the file and the session.
+  def self.behavior_state
+    Sketchup.read_default(BEHAVIOR_SECTION, "state", BEHAVIOR_ALL).to_i
+  rescue StandardError
+    BEHAVIOR_ALL
+  end
+
+  # Sets the mode, and puts it on whatever happens to be selected right now.
+  #
+  # It no longer reads the selection to decide anything. It used to compare the
+  # selected component's own mask, which meant the button needed exactly one
+  # component selected to work at all -- fine when the mask belonged to that
+  # component, wrong now that the mode is a preference. Picking a mode with
+  # nothing selected is a perfectly reasonable thing to do.
   def self.set_behavior(state)
-    sel = Sketchup.active_model.selection
-    definition = sel[0].definition
-    behavior = definition.behavior
-    old_state = Sketchup.read_default("htu_behavior", "state")
-    if old_state && (old_state == state && (old_state != 0 && old_state == behavior.no_scale_mask?))
-      state = 0
+    # Pressing the button that is already on means "off", back to all handles.
+    if behavior_state == state && state != BEHAVIOR_ALL
+      state = BEHAVIOR_ALL
     end
-    Sketchup.write_default("htu_behavior", "state", state)
-    behavior.no_scale_mask = state
+    Sketchup.write_default(BEHAVIOR_SECTION, "state", state)
+    apply_behavior
     Sketchup.send_action("selectScaleTool:")
+    state
+  end
+
+  # Applies the remembered mode to a component as it is selected, so a new file
+  # or a fresh SketchUp starts out in the mode last chosen instead of back on
+  # all handles.
+  #
+  # Writing only when the mask actually differs matters more than it looks: this
+  # runs on every selection change, and an unconditional write would dirty the
+  # model and push an undo step each time the user clicked something.
+  def self.apply_behavior(selection = Sketchup.active_model.selection)
+    state = behavior_state
+    objects = selection.to_a.select { |e| e.respond_to?(:definition) }
+    changed = objects.reject do |object|
+      object.definition.behavior.no_scale_mask? == state
+    end
+    if changed.empty?
+      return 0
+    end
+    model = Sketchup.active_model
+    model.start_operation("Scale Handles", true)
+    changed.each { |object| object.definition.behavior.no_scale_mask = state }
+    model.commit_operation
+    changed.size
+  rescue StandardError => e
+    p(e)
+    0
   end
   def self.toggle_dimensions
     Sketchup.write_default(PLUGIN_NAME, "show_dim", !show_dim?)
@@ -77,21 +120,14 @@ end
     cmds[@cmd_x] = x
     cmds[@cmd_y] = y
     cmds[@cmd_z] = z
+    # Checked against the remembered mode, not against the selected component's
+    # own mask, and never grayed. These used to be dead unless exactly one
+    # component was selected -- which read as "broken" far more often than it
+    # read as "not applicable", and is simply the wrong question now that the
+    # mode is a preference the user can set at any time.
     cmds.each do |cmd, val|
       cmd.set_validation_proc do
-        sel = Sketchup.active_model.selection
-        if sel.length == 1 && sel[0].respond_to?(:definition)
-          definition = sel[0].definition
-          behavior = definition.behavior
-          no_scale_mask = behavior.no_scale_mask?
-          if no_scale_mask == val
-            MF_CHECKED
-          else
-            MF_ENABLED
-          end
-        else
-          MF_GRAYED
-        end
+        behavior_state == val ? MF_CHECKED : MF_ENABLED
       end
     end
     cmds[@cmd_dim] = 0
@@ -103,40 +139,9 @@ end
   def self.active?
     @active
   end
-  def self.scale_factor=(factor)
-    begin
-      begin
-        original_verbose = $VERBOSE
-        $VERBOSE = nil
-        PLUGIN.const_set(:SCALE_FACTOR, factor)
-        begin
-          PLUGIN::RadialMenu.scale_factor = factor
-          PLUGIN.active_overlay.dim_scale.pet_toolbar.redraw_drawui
-        rescue => exception
-          p(exception)
-        end
-        Sketchup.active_model.active_view.invalidate
-      rescue StandardError => e
-        p(e)
-      end
-    ensure
-      $VERBOSE = original_verbose
-    end
-  end
-  def self.verify_ui_scale
-    dialog = UI::HtmlDialog.new({:dialog_title => "", :resizable => true, :width => 300, :min_width => 300, :max_width => 300, :height => 300, :min_height => 300, :max_height => 300, :left => -300, :top => -300})
-    html = "      <!DOCTYPE html>\n      <html><script> window.onload = function() { sketchup.ready(window.outerWidth, window.devicePixelRatio) }; </script></html>\n"
-    dialog.add_action_callback("ready") do |_a, _width, pixel_ratio|
-      PLUGIN.scale_factor = pixel_ratio
-      dialog.close
-      if Sketchup.respond_to?(:focus)
-        Sketchup.focus
-      end
-    end
-    dialog.set_html(html)
-    dialog.center
-    dialog.show
-  end
+  # scale_factor= and verify_ui_scale lived here to size the radial pet toolbar.
+  # Every consumer of SCALE_FACTOR was inside radial_menu/, so both went with the
+  # toolbar. Dimension text sizes itself from view.pixels_to_model instead.
   module Typeface
     class TextTypeface
       def self.eval(pts, t)
@@ -165,7 +170,11 @@ end
       end
       def self.points(pts, numpts)
         curvepts = []
-        dt = 1 / numpts
+        # numpts is an Integer (text_geometry passes 6), so `1 / numpts` was
+        # integer division -> 0. Every sample landed on t = 0, collapsing each
+        # quadratic segment onto its start point: glyphs lost every curve and
+        # the dimension text rendered as broken strokes.
+        dt = 1.0 / numpts
         (0..numpts).each do |i|
           t = i * dt
           curvepts[i] = TextTypeface.eval(pts, t)

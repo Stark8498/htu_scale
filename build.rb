@@ -30,8 +30,9 @@ VERSION  = File.read(File.join(ROOT, "htu_scaleplus.rb"))[/PLUGIN_VERSION\s*=\s*
 RBZ_NAME = "htu_scaleplus-#{VERSION}.rbz"
 RBZ      = File.join(DIST, RBZ_NAME)
 
-# Everything that ships. test/, dist/, build.rb and docs stay out of the archive.
-EXCLUDE_DIRS  = %w[test dist .git].freeze
+# Everything that ships. test/, dist/, dev/, build.rb and docs stay out of the
+# archive.
+EXCLUDE_DIRS  = %w[test dist docs dev .git].freeze
 EXCLUDE_FILES = %w[build.rb README_BUILD.md].freeze
 # *.susig is Trimble's extension signature, which hashes every shipped file.
 # This build replaces loader.rb and edits six others, so the original signature
@@ -65,6 +66,15 @@ puts "  ruby -c            : OK (#{Dir.glob(File.join(ROOT, '**', '*.rb')).size}
   "dropped-param scan" => "test/dropped_param_scan.rb",
   "load test"          => "test/load_test.rb",
   "runtime test"       => "test/runtime_test.rb",
+  "dim favorites test" => "test/dim_favorites_test.rb",
+  "dim menu test"      => "test/dim_menu_test.rb",
+  "dim edit test"      => "test/dim_edit_test.rb",
+  "add dialog test"    => "test/dim_add_dialog_test.rb",
+  "retarget test"      => "test/retarget_test.rb",
+  "behavior test"      => "test/behavior_test.rb",
+  "group lock test"    => "test/group_lock_test.rb",
+  "navigation test"    => "test/navigation_test.rb",
+  "text size test"     => "test/text_size_persistence_test.rb",
 }.each do |label, script|
   out = `"#{RUBY}" "#{File.join(ROOT, script)}" 2>&1`
   abort "ABORT: #{label} failed\n#{out}" unless $?.success?

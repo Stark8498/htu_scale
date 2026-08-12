@@ -14,6 +14,31 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
         return
       end
       @mouse = [x, y]
+      # Track the position, then stop. Two things must not happen while the user
+      # is dragging the camera, and both used to.
+      #
+      # An orbit moves the selection's box across the screen under a cursor being
+      # held still, so #own_click? flips to true on its own and the tool grabs the
+      # stack -- suspending the real Scale tool and its grips in the middle of an
+      # orbit, which is the one thing the user was looking at.
+      #
+      # And ScalePPTool#onMouseMove can decide to hand the stack back, but
+      # #pop_tool pops whatever is on TOP, which during a navigation is SketchUp's
+      # own camera tool. That aborts the orbit the user is in the middle of.
+      #
+      # Nothing is merely postponed here: #navigation_finished replays the whole
+      # decision as soon as the camera is released.
+      if PLUGIN.navigating?
+        return
+      end
+      dispatch_mouse(flags, x, y, view)
+    end
+    # The push/pop decision, split out of #onMouseMove so it can also run without
+    # one. That is the whole point of the split: the pop lives inside
+    # ScalePPTool#onMouseMove, so before this existed the real grips stayed
+    # suspended after an orbit until the user moved the mouse -- and a cursor left
+    # sitting still never got them back at all.
+    def dispatch_mouse(flags, x, y, view)
       @ip_mouse.pick(view, x, y)
       at = Sketchup.active_model.tools.active_tool
       @tools.each do |tool|
@@ -25,9 +50,35 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   t.active?
 end
       if active_tool && active_tool.tool_name == "ScaleTool"
-        if !active_tool.on_push_tool && active_tool.on_hover?
+        # wants_push?, not on_hover?: the tool now also takes the stack away
+        # from the grips, so a click on another object can switch the scale to
+        # it instead of being swallowed. It decides; this only relays.
+        if !active_tool.on_push_tool && active_tool.wants_push?
           active_tool.on_push_tool = true
           Sketchup.active_model.tools.push_tool(active_tool)
+        end
+      end
+    end
+    # SketchUp has handed the Scale tool back after an orbit, pan or zoom. Replay
+    # the decision against the new camera and the last known cursor position, so
+    # the Scale tool is fully live again the moment the middle button comes up.
+    #
+    # Deferred a tick: SketchUp is still unwinding its own camera tool off the
+    # stack while this callback runs, and a push or a pop landing in the middle of
+    # that is exactly the damage this method exists to avoid.
+    def navigation_finished
+      unless enabled? && @mouse
+        return
+      end
+      x, y = @mouse
+      id = UI.start_timer(0, false) do
+        UI.stop_timer(id)
+        begin
+          view = Sketchup.active_model.active_view
+          dispatch_mouse(0, x, y, view)
+          view.invalidate
+        rescue StandardError => e
+          p(e)
         end
       end
     end
@@ -184,8 +235,21 @@ end
     end
     def draw(view)
       at = Sketchup.active_model.tools.active_tool
+      # `at != tool` is there to avoid drawing twice when SketchUp is calling the
+      # tool's own #draw. During a navigation it is not: a camera tool sits on top
+      # of the stack and everything below it is suspended.
+      #
+      # Measured with dev/htu_nav_probe.rb: orbiting with the tool OFF the stack
+      # reports at=nil, so `at != tool` holds and this clause changes nothing
+      # there. Orbiting with the tool ON the stack was not measured, and if
+      # #active_tool reports the suspended tool in that case then `at != tool` is
+      # false and the grips vanish again. So the navigation case is stated rather
+      # than relied upon. Drawing the same grips twice would be invisible anyway --
+      # same colour, same screen position -- while not drawing them is the whole
+      # bug being fixed.
+      navigating = PLUGIN.navigating?
       @tools.each do |tool|
-        if tool.active? && at != tool
+        if tool.active? && (navigating || at != tool)
           tool.draw(view)
         end
       end

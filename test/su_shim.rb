@@ -12,11 +12,110 @@ $SU_CALLS = Hash.new { |h, k| h[k] = [] }
 $SU_TIMERS = []
 
 module Sketchup
-  class Entity; end
+  class Entity
+    # Attribute dictionaries, modelled well enough for DimFavorites: values
+    # round-trip per (dictionary, key) and a missing key returns the default.
+    def attributes; @attributes ||= Hash.new { |h, k| h[k] = {} }; end
+    def set_attribute(dict, key, value); attributes[dict.to_s][key] = value; end
+    def get_attribute(dict, key, default = nil)
+      attributes[dict.to_s].fetch(key, default)
+    end
+    # Every real entity answers this, and it is never decoration: an undo or an
+    # explode can delete one while plugin code still holds the reference, which
+    # is exactly the situation GroupLock has to survive. A shim where valid? did
+    # not exist raised NoMethodError on the guard clauses written to handle it.
+    def valid?; !@deleted; end
+    # Which collection holds this entity, so explode can put children back where
+    # the group was. The real API exposes #parent (a definition) rather than the
+    # collection; this is shim plumbing, kept under a name no SketchUp method
+    # has, so nothing can mistake it for API surface being tested.
+    attr_accessor :parent_entities
+    def mark_deleted!; @deleted = true; self; end
+  end
   class Drawingelement < Entity; end
-  class ComponentDefinition < Drawingelement; end
-  class ComponentInstance < Drawingelement; end
-  class Group < Drawingelement; end
+  # A definition's behavior carries the no-scale mask the tool reads to know
+  # which handles a component allows. 0 means "everything is scalable", which
+  # is the plain case and the one worth defaulting to.
+  class Behavior
+    attr_accessor :mask
+    def initialize; @mask = 0; end
+    def no_scale_mask?; @mask; end
+    def no_scale_mask=(m); @mask = m; end
+  end
+  class ComponentDefinition < Drawingelement
+    def behavior; @behavior ||= Behavior.new; end
+    def bounds; @bounds ||= Geom::BoundingBox.new; end
+    def entities; @entities ||= Entities.new; end
+  end
+  class ComponentInstance < Drawingelement
+    # A real instance always resolves to a definition; DimFavorites writes to both.
+    def definition; @definition ||= ComponentDefinition.new; end
+  end
+  # Bounds and placement, so a selected object can be measured. Without these
+  # anything that reaches compute_selected_bounds dies, which is every code path
+  # that runs with something actually selected.
+  module Placed
+    def transformation; @transformation ||= Geom::Transformation.new; end
+    def transformation=(t); @transformation = t; end
+    def local_bounds; @local_bounds ||= Geom::BoundingBox.new; end
+    def bounds; local_bounds; end
+  end
+  class ComponentInstance; include Placed; end
+  class Group < Drawingelement
+    include Placed
+    def definition; @definition ||= ComponentDefinition.new; end
+    # The same collection the definition holds, as in the real API, so a mask set
+    # through the definition and children read through the group cannot drift.
+    def entities; definition.entities; end
+    # Puts the children back into the collection the group itself was in and
+    # takes the group out of the model, the way the real one does -- including
+    # the return value, which is the only dependable handle on the children
+    # afterwards and the thing GroupLock#explode_wrapper relies on.
+    def explode
+      parent = parent_entities
+      children = entities.to_a
+      children.each do |child|
+        entities.remove_entity(child)
+        parent.add_entity(child) if parent
+      end
+      parent.remove_entity(self) if parent
+      mark_deleted!
+      $SU_CALLS[:explode] << self
+      children
+    end
+  end
+
+  # Real Entities, not the empty array this used to be. The multi-object axis
+  # lock adds a group, reads it back out of the collection and explodes it, so a
+  # collection that cannot hold anything cannot test any of it.
+  class Entities
+    include Enumerable
+    def initialize(*); @items = []; end
+    def each(&b); @items.each(&b); end
+    def [](i); @items[i]; end
+    def size; @items.size; end
+    def length; @items.size; end
+    def empty?; @items.empty?; end
+    def to_a; @items.dup; end
+    # SketchUp MOVES the listed entities into the new group rather than copying
+    # them. A shim that left them in place would hide a double-membership bug.
+    def add_group(*objects)
+      objects = objects.flatten
+      group = Group.new
+      objects.each { |e| @items.delete(e) }
+      objects.each { |e| group.entities.add_entity(e) }
+      add_entity(group)
+      $SU_CALLS[:add_group] << objects
+      group
+    end
+    def add_entity(e); @items << e unless @items.include?(e); e.parent_entities = self; e; end
+    def remove_entity(e); @items.delete(e); e.parent_entities = nil if e.parent_entities.equal?(self); e; end
+    def transform_entities(*); $SU_CALLS[:transform_entities] << true; true; end
+  end
+  # Present so "is this a scale target?" can be answered in a test. The tool
+  # accepts only things that respond to #definition, and raw geometry does not.
+  class Face < Drawingelement; end
+  class Edge < Drawingelement; end
   class Color
     attr_accessor :red, :green, :blue, :alpha
     def initialize(r = 0, g = 0, b = 0, a = 255)
@@ -35,13 +134,29 @@ module Sketchup
   end
   class ImageRep; def initialize(*); end; end
   class InstancePath; def initialize(*); end; end
-  class InputPoint; def initialize(*); end; end
+  # #pick is what the overlay calls on every mouse move it acts on, so a bare
+  # InputPoint made the whole dispatch path untestable.
+  class InputPoint
+    def initialize(*); end
+    def pick(_view, x, y, _ip = nil); @position = Geom::Point3d.new(x, y, 0); true; end
+    def position; @position ||= Geom::Point3d.new; end
+    def valid?; !@position.nil?; end
+    def copy!(other); @position = other.position; self; end
+    def draw(*); self; end
+  end
   class Http; end
 
   class Overlay
     attr_accessor :name, :description
     def initialize(*); end
-    def enabled?; false; end
+    # Registered disabled, the way SketchUp does it. The writer is the part that
+    # was missing: observer.rb#add_overlay enables the overlay on registration and
+    # that line only means anything if this exists -- without it the assignment
+    # raised, the rescue around it swallowed the error, and every path in the
+    # plugin gated on enabled? stayed unreachable from a test.
+    def enabled?; @enabled ? true : false; end
+    def enabled=(state); @enabled = state; end
+    def valid?; true; end
     def start_observing_model; end
     def stop_observing_model; end
   end
@@ -49,13 +164,26 @@ module Sketchup
   class AppObserver; end
   class SelectionObserver; end
   class ToolsObserver; end
+  class ModelObserver; end
+  class EntitiesObserver; end
 
+  # Backed by a real array rather than always-empty: the tool reaches the
+  # component it is editing through the selection, so a test that cannot select
+  # anything cannot reach any of that code. Starts empty, as before.
   class Selection
     include Enumerable
-    def each(&b); [].each(&b); end
-    def [](_i); nil; end
-    def size; 0; end
-    def empty?; true; end
+    def initialize; @items = []; end
+    def each(&b); @items.each(&b); end
+    def [](i); @items[i]; end
+    def size; @items.size; end
+    def length; @items.size; end
+    def empty?; @items.empty?; end
+    def clear; @items = []; self; end
+    def add(*objs); @items |= objs.flatten; self; end
+    def to_a; @items.dup; end
+    # Distinct from #add: an observer added to the selection would otherwise
+    # become a selected entity and be handed to the tool as the component.
+    def add_observer(o); $SU_CALLS[:selection_observer] << o; true; end
   end
 
   class Overlays
@@ -65,15 +193,50 @@ module Sketchup
     def each(&b); [].each(&b); end
   end
 
+  # The tool stack. Tool#active? consults it on every mouse move, so without it
+  # nothing that goes through onMouseMove can be exercised at all.
+  class Tools
+    attr_reader :stack
+    def initialize; @stack = []; end
+    def active_tool; @stack.last; end
+    # Writable, because "the user is mid-orbit" is not a state a test can reach by
+    # pushing a Ruby tool -- SketchUp's camera tools are native and never appear on
+    # the stack this shim models. The plugin asks this to decide whether it may
+    # touch the stack at all, so a test has to be able to say yes.
+    attr_writer :active_tool_name
+    def active_tool_name
+      return @active_tool_name if @active_tool_name
+      top = @stack.last
+      top.respond_to?(:tool_name) ? top.tool_name : "SelectionTool"
+    end
+    def push_tool(t); @stack.push(t); $SU_CALLS[:push_tool] << t; true; end
+    def pop_tool; $SU_CALLS[:pop_tool] << @stack.last; @stack.pop; true; end
+    def add_observer(o); $SU_CALLS[:tools_observer] << o; true; end
+  end
+
   class Model
+    def tools; @tools ||= Tools.new; end
+    def select_tool(t); tools.stack.clear; tools.push_tool(t) if t; $SU_CALLS[:select_tool] << t; true; end
     def selection; @selection ||= Selection.new; end
     def overlays; @overlays ||= Overlays.new; end
-    def active_view; @view ||= View.new; end
-    def entities; []; end
+    # Handed its model, the way a real view always knows one. Drawing code
+    # reaches the selection through view.model, and a view with none turns that
+    # into a NoMethodError the moment a test tries to draw anything.
+    def active_view; @view ||= View.new(self); end
+    def valid?; true; end
+    def entities; @entities ||= Entities.new(self); end
+    # No group-editing context in the shim, so the active context IS the root.
+    # Real SketchUp returns a group's or component's entities while the user is
+    # inside one, which is why GroupLock#contexts looks at both and dedupes.
+    def active_entities; entities; end
     def materials; []; end
     def pages; []; end
-    def add_observer(*); true; end
-    def start_operation(*); true; end
+    def definitions; @definitions ||= []; end
+    def add_observer(o); $SU_CALLS[:model_observer] << o; true; end
+    # Recorded: applying the scale mode runs on every selection change, and
+    # "did it open an operation it did not need?" is the difference between a
+    # quiet no-op and dirtying the file on every click.
+    def start_operation(name = nil, *); $SU_CALLS[:start_operation] << name; true; end
     def commit_operation; true; end
     def abort_operation; true; end
     def options; Hash.new { |h, k| h[k] = {} }; end
@@ -92,6 +255,15 @@ module Sketchup
     def height; 100.0; end
   end
 
+  # What a click lands on. Tests set #picked; do_pick records so a test can
+  # tell "asked the model" from "guessed".
+  class PickHelper
+    attr_accessor :picked
+    def do_pick(x, y); $SU_CALLS[:do_pick] << [x, y]; picked ? 1 : 0; end
+    def best_picked; @picked; end
+    def count; @picked ? 1 : 0; end
+  end
+
   class View
     attr_reader :model
     def initialize(model = nil); @model = model; @textures = 0; end
@@ -102,23 +274,62 @@ module Sketchup
     def camera; @camera ||= Camera.new; end
     def add_observer(*); true; end
     def remove_observer(*); true; end
-    def screen_coords(_pt); Geom::Point3d.new; end
+    # A flat projection rather than the origin for everything. Retargeting asks
+    # where the selection lands on screen, and a view that maps the whole model
+    # onto one point cannot answer that -- it would report every click as being
+    # on the grips.
+    # A plain [x, y, z] is as good as a Point3d here, the way it is everywhere
+    # else in the API -- create_box hands out raw arrays and they arrive here
+    # unconverted.
+    def screen_coords(pt)
+      pt = Geom::Point3d.new(*pt) if pt.is_a?(Array)
+      Geom::Point3d.new(pt.x, pt.y, 0)
+    end
+    def pick_helper(*); @pick_helper ||= PickHelper.new; end
     def pixels_to_model(px, _pt); px.to_f; end
     def inference_locked?; false; end
     def lock_inference(*); self; end
     def tooltip=(_t); _t; end
     def line_width=(_w); _w; end
     def line_stipple=(_s); _s; end
-    def drawing_color=(_c); _c; end
-    def draw(*); self; end
-    def draw2d(*); self; end
+    # The colour is remembered rather than discarded, so a recorded draw call
+    # carries the colour in force when it was made. Whether a shape is filled
+    # or only outlined is otherwise invisible to a test.
+    def drawing_color=(c); @drawing_color = c; end
+    def draw(mode = nil, points = nil, *)
+      $SU_CALLS[:draw] << [mode, points, @drawing_color]
+      self
+    end
+    def draw2d(mode = nil, points = nil, *)
+      $SU_CALLS[:draw2d] << [mode, points, @drawing_color]
+      self
+    end
     def draw_points(*); self; end
-    def draw_text(*); self; end
+    def draw_text(point = nil, text = nil, options = {}, *)
+      check_text_options!(options)
+      $SU_CALLS[:draw_text] << [point, text, options]
+      self
+    end
     def draw_polyline(*); self; end
-    def drawing_color; Sketchup::Color.new(0, 0, 0); end
+    def drawing_color; @drawing_color || Sketchup::Color.new(0, 0, 0); end
     def set_color_from_line(*); self; end
+    # SketchUp validates the options hash and raises
+    #   TypeError: wrong argument type nil (expected Symbol)
+    # on any non-Symbol key. Modelled here so a malformed options hash fails the
+    # harness instead of sailing through it (this is how the {nil => options}
+    # tooltip defect stayed invisible while every gate reported PASS).
+    def check_text_options!(options)
+      return unless options.is_a?(Hash)
+
+      bad = options.keys.reject { |k| k.is_a?(Symbol) }
+      return if bad.empty?
+
+      raise TypeError, "wrong argument type #{bad.first.class} (expected Symbol)"
+    end
+
     # Real signature: text_bounds(point, text, options = {}) -> Geom::Bounds2d
     def text_bounds(point, text, options = {})
+      check_text_options!(options)
       size = (options[:size] || 10).to_f
       w = text.to_s.length * size * 0.6
       Geom::Bounds2d.new(point[0], point[1], w, size * 1.3)
@@ -133,10 +344,25 @@ module Sketchup
     def platform; :platform_win; end
     def version; "26.0.0"; end
     def active_model; @model ||= Model.new; end
-    def read_default(_sec, _key, default = nil); default; end
-    def write_default(_sec, _key, _val); true; end
+    # Real read_default/write_default persist to the registry (or plist) and
+    # survive restarts. Modelled with a store rather than returning the default,
+    # so code that clobbers a saved preference on load is visible to the tests.
+    def defaults; @defaults ||= {}; end
+    def read_default(sec, key, default = nil)
+      defaults.fetch([sec.to_s, key.to_s], default)
+    end
+
+    def write_default(sec, key, val)
+      defaults[[sec.to_s, key.to_s]] = val
+      true
+    end
     def send_action(a); $SU_CALLS[:send_action] << a; true; end
-    def set_status_text(*); true; end
+    # Recorded, not swallowed: the VCB label, value and prompt are the only
+    # feedback the in-place dimension editor gives about what it is waiting for.
+    def set_status_text(text = "", target = nil)
+      $SU_CALLS[:status_text] << [text, target]
+      true
+    end
     def status_text=(_t); true; end
     def format_length(l); l.to_s; end
     def temp_dir; Dir.tmpdir; end
@@ -220,7 +446,11 @@ module UI
   class Toolbar
     attr_reader :name, :items
     def initialize(name); @name = name; @items = []; $SU_CALLS[:toolbar] << name; end
-    def add_item(cmd); @items << cmd; self; end
+    def add_item(cmd)
+      @items << cmd
+      $SU_CALLS[:toolbar_item] << [@name, cmd.respond_to?(:menu_text) ? cmd.menu_text : cmd]
+      self
+    end
     def add_separator; self; end
     def restore; $SU_CALLS[:toolbar_restore] << @name; self; end
     def show; self; end
@@ -231,10 +461,13 @@ module UI
     attr_reader :options, :callbacks
     def initialize(opts = {}); @options = opts; @callbacks = {}; end
     def add_action_callback(name, &blk); @callbacks[name] = blk; self; end
-    def set_html(_h); self; end
+    # Recorded rather than dropped: the Add window's whole output is the
+    # render(...) call it pushes, so a test can only see it through these.
+    attr_reader :html, :scripts
+    def set_html(h); @html = h; self; end
     def set_file(f); @file = f; $SU_CALLS[:dialog_file] << f; self; end
     def set_url(_u); self; end
-    def execute_script(_s); self; end
+    def execute_script(s); (@scripts ||= []) << s; self; end
     def show; @visible = true; self; end
     def close; @visible = false; self; end
     def visible?; !!@visible; end
@@ -245,7 +478,9 @@ module UI
   class << self
     def menu(name); MENUS[name]; end
     def scale_factor; 1.0; end
-    def messagebox(msg, *); $SU_CALLS[:messagebox] << msg; 1; end
+    # $SU_ANSWER lets a test say what the user clicked. Defaults to IDYES so a
+    # confirmation that is never answered does not silently look like a refusal.
+    def messagebox(msg, *); $SU_CALLS[:messagebox] << msg; $SU_ANSWER || IDYES; end
     def inputbox(*); nil; end
     def openURL(url); $SU_CALLS[:open_url] << url; true; end
     def openpanel(*); nil; end
@@ -256,7 +491,10 @@ module UI
       $SU_TIMERS << { id: id, sec: sec, repeat: repeat, proc: blk }
       id
     end
-    def stop_timer(_id); true; end
+    # Recorded: a repeating timer that is never stopped keeps firing for the
+    # rest of the SketchUp session, so "was it stopped" is worth being able to
+    # assert on.
+    def stop_timer(id); $SU_CALLS[:stop_timer] << id; true; end
     def show_extension_manager; true; end
   end
 end
@@ -375,22 +613,33 @@ module Geom
     def self.scaling(*); new; end
     def self.translation(*); new; end
     def self.rotation(*); new; end
+    def self.axes(*); new; end
     def to_a; Array.new(16, 0.0); end
     def *(_o); self; end
     def inverse; self; end
+    # Identity axes. dim_axis compares a dimension's direction against these to
+    # decide which length it is, so a transformation without them cannot answer
+    # the one question the whole context menu is keyed on.
+    def origin; Point3d.new(0, 0, 0); end
+    def xaxis; Vector3d.new(1, 0, 0); end
+    def yaxis; Vector3d.new(0, 1, 0); end
+    def zaxis; Vector3d.new(0, 0, 1); end
   end
 
   def self.intersect_line_plane(*); Point3d.new; end
   def self.linear_combination(*); Point3d.new; end
 end
 
-class Length < Float
-  def to_l; self; end
-  def to_s; super; end
-end
+# In SketchUp a Length is a Float subclass. Plain Ruby cannot instantiate one --
+# Float has no allocator, so `Length.new` raises -- and the shim used to call it
+# from every to_l. The class stays defined because utils.rb tests
+# `value.is_a?(Length)`, but to_l hands back an ordinary Float: arithmetic,
+# comparison, sorting, to_f and to_s all behave the same, which is everything the
+# plugin does with a length.
+class Length < Float; end
 
 class Numeric
-  def to_l; Length.new(to_f); end unless method_defined?(:to_l)
+  def to_l; to_f; end unless method_defined?(:to_l)
   def inch; self; end unless method_defined?(:inch)
   def m; self * 39.3701; end unless method_defined?(:m)
   def mm; self / 25.4; end unless method_defined?(:mm)
@@ -401,7 +650,22 @@ class Numeric
 end
 
 class String
-  def to_l; Length.new(to_f); end unless method_defined?(:to_l)
+  # SketchUp parses the string in the model's current units and raises
+  # ArgumentError on anything it cannot read. Modelled here (metric/mm) because
+  # DimFavorites.parse relies on the raise to separate good input from bad --
+  # a permissive to_f would silently turn "abc" into 0 and hide the bug.
+  # The sign must be inside the capture, or "-5" parses as 5.
+  LENGTH_PATTERN = /\A([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(mm|cm|m|in|"|'|)\z/.freeze
+  UNIT_SCALE = { "mm" => 1 / 25.4, "cm" => 1 / 2.54, "m" => 39.3701,
+                 "in" => 1.0, '"' => 1.0, "'" => 12.0 }.freeze
+
+  def to_l
+    match = LENGTH_PATTERN.match(strip)
+    raise ArgumentError, "invalid length: #{inspect}" unless match
+
+    unit = match[2].empty? ? "mm" : match[2]
+    match[1].to_f * UNIT_SCALE.fetch(unit)
+  end
 end
 
 # SketchUp's global geometry constants.
@@ -432,11 +696,33 @@ TextVerticalAlignCapHeight  = 1
 TextVerticalAlignCenter     = 2
 TextVerticalAlignBoundsTop  = 3
 
+# Sketchup.set_status_text targets.
+SB_PROMPT    = 0
+SB_VCB_LABEL = 1
+SB_VCB_VALUE = 2
+
 MF_ENABLED   = 0
 MF_DISABLED  = 1
 MF_CHECKED   = 2
 MF_UNCHECKED = 3
 MF_GRAYED    = 4
+
+# UI.messagebox button sets and the codes it answers with.
+MB_OK          = 0
+MB_OKCANCEL    = 1
+MB_ABORTRETRYIGNORE = 2
+MB_YESNOCANCEL = 3
+MB_YESNO       = 4
+MB_RETRYCANCEL = 5
+MB_MULTILINE   = 6
+
+IDOK     = 1
+IDCANCEL = 2
+IDABORT  = 3
+IDRETRY  = 4
+IDIGNORE = 5
+IDYES    = 6
+IDNO     = 7
 
 # ------------------------------------------------- sketchup.rb / extensions.rb
 $LOADED_FILE_MARKERS = {}

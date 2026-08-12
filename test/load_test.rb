@@ -69,7 +69,11 @@ checks = {
   "ScalePPTool defined"      => TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:ScalePPTool),
   "DimsUI.show_dialog"       => TRINH_VAN_PHUC::HTU_ScalePlus::DimsUI.respond_to?(:show_dialog),
   "Update.check"             => TRINH_VAN_PHUC::HTU_ScalePlus::Update.respond_to?(:check),
-  "RadialMenu module"        => TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:RadialMenu),
+  "DimFavorites.parse"       => TRINH_VAN_PHUC::HTU_ScalePlus::DimFavorites.respond_to?(:parse),
+  "DimMenu.build"            => TRINH_VAN_PHUC::HTU_ScalePlus::DimMenu.respond_to?(:build),
+  # The pet toolbar and the radial menu that drew it are no longer loaded.
+  "PetToolbar gone"          => !TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:PetToolbar),
+  "RadialMenu not loaded"    => !TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:RadialMenu),
 }
 
 fails = 0
@@ -88,9 +92,6 @@ res = [
   "htu_scaleplus/Resources/icon_y.png",
   "htu_scaleplus/Resources/icon_z.png",
   "htu_scaleplus/Resources/show_dim.png",
-  "htu_scaleplus/radial_menu/Resources/missing.png",
-  "htu_scaleplus/radial_menu/Resources/text_command.png",
-  "htu_scaleplus/radial_menu/Resources/tb_unknown.png",
   "htu_scaleplus/ui/html/dims.html",
   "htu_scaleplus/ui/js/dims.js",
   "htu_scaleplus/ui/css/dims.css",

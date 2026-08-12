@@ -63,11 +63,49 @@ rescue Exception => e
   puts "  RAISED #{e.class}: #{e.message}"
 end
 
-puts "\n--- instantiate the overlay, the tool and the pet toolbar ---"
+puts "\n--- toolbar contents ---"
+# The six behaviour commands lost their only home when the pet toolbar went, so
+# the real toolbar has to carry them: 1 overlay toggle + 6.
+tb_items = $SU_CALLS[:toolbar_item].map(&:last)
+puts "  items (#{tb_items.size}) : #{tb_items.inspect}"
+%w[Behavior\ Scale\ All Behavior\ Scale\ XYZ Behavior\ Scale\ X Behavior\ Scale\ Y
+   Behavior\ Scale\ Z Toggle\ show\ dimensions].each do |label|
+  next if tb_items.include?(label)
+
+  fails += 1
+  puts "  MISSING from toolbar: #{label}"
+end
+
+puts "\n--- menu entries, which is what makes a shortcut assignable ---"
+# SketchUp lists only menu commands in Preferences > Shortcuts. A command that
+# lives on the toolbar alone can never be bound to a key, so every one of them
+# has to appear in a menu as well.
+menu_items = $SU_CALLS[:menu_item].map(&:last)
+puts "  items (#{menu_items.size}) : #{menu_items.inspect}"
+["ScalePlus", "Behavior Scale All", "Behavior Scale XYZ", "Behavior Scale X",
+ "Behavior Scale Y", "Behavior Scale Z", "Toggle show dimensions"].each do |label|
+  next if menu_items.include?(label)
+
+  fails += 1
+  puts "  MISSING from the menu: #{label}"
+end
+
+# Both the menu item and the ten-second timer that checked silently on startup
+# pointed at the original vendor's server.
+if menu_items.include?("Check for Update")
+  fails += 1
+  puts "  Check for Update is still on the menu"
+end
+
+puts "  menu name            : #{TRINH_VAN_PHUC::MENU_NAME}"
+unless TRINH_VAN_PHUC::MENU_NAME == "HTU_ScalePlus"
+  fails += 1
+  puts "  the submenu is not named after the extension"
+end
+
+puts "\n--- instantiate the overlay, the tool and the observer ---"
 [["ScalePP2Overlay", -> { TRINH_VAN_PHUC::HTU_ScalePlus::ScalePP2Overlay.new }],
  ["ScalePPTool", -> { TRINH_VAN_PHUC::HTU_ScalePlus::ScalePPTool.new(nil) }],
- ["PetToolbar", -> { TRINH_VAN_PHUC::HTU_ScalePlus::PetToolbar.new(nil) }],
- ["RadialMenu::Menu", -> { TRINH_VAN_PHUC::HTU_ScalePlus::RadialMenu::Menu.new }],
  ["ScalePP2Observer", -> { TRINH_VAN_PHUC::HTU_ScalePlus::ScalePP2Observer.new }]].each do |label, thunk|
   obj = thunk.call
   puts format("  %-18s -> %s OK", label, obj.class)

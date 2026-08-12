@@ -15,6 +15,10 @@ module TRINH_VAN_PHUC::HTU_ScalePlus::RadialMenu
         @leader_type = nil
         @target_point = nil
       else
+        # DECOMPILER FIX: `options` is a local var (assigned in the branch
+        # above), so on this path it is nil and `merge!` raised TypeError. Every
+        # leader-style construction was therefore dead. Default to {}.
+        options = {}
         @leader_type = leader_type
         @target_point = target_point
       end
