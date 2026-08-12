@@ -113,39 +113,51 @@ end
 puts "--- populated list ---"
 menu, group = build(%w[45 200 400])
 
-check "three saved sizes come first" do
-  menu.entries[0, 3].all? { |e| e.is_a?(String) } && menu.entries[0, 3].size == 3
+check "a grayed heading names the block of saved sizes" do
+  menu.entries.first == "Favorite Dimensions" &&
+    menu.validations["Favorite Dimensions"].call == MF_GRAYED
+end
+
+check "three saved sizes come under it" do
+  menu.entries[1, 3].all? { |e| e.is_a?(String) } && menu.entries[1, 3].size == 3
 end
 
 check "a separator divides the sizes from the actions" do
-  menu.entries[3] == :separator
+  menu.entries[4] == :separator
 end
 
-check "then Open list... and Text size >, nothing between" do
-  menu.entries[4, 2] == ["Open list...", "Text size >"]
+check "then Open list..., Show Manager, Text size >" do
+  menu.entries[5, 3] == ["Open list...", "Show Manager", "Text size >"]
 end
 
 check "nothing else is on the menu" do
-  menu.entries.size == 6
+  menu.entries.size == 8
 end
 
-check "Show Manager is gone" do
-  !menu.labels.include?("Show Manager")
-end
+# Show Manager was dropped while this file was being written, and it was the ONLY
+# way to open the Vue dimension manager -- which still ships, 11 files of it, and
+# which observer.rb still refreshes on every selection change.
+check "Show Manager opens the Vue manager" do
+  block = menu.blocks["Show Manager"]
+  next false unless block
 
-check "Referenced Dimensions is gone" do
-  menu.labels.none? { |l| l.include?("Referenced") || l.include?("Favorite") }
+  before = $SU_CALLS[:dialog_file].size + $SU_CALLS[:dialog].size
+  block.call
+  PLUG::DimsUI.dialog && ($SU_CALLS[:dialog_file].size + $SU_CALLS[:dialog].size) > before
 end
 
 check "every size carries a validation proc for the checkmark" do
-  menu.entries[0, 3].all? { |label| menu.validations.key?(label) }
+  menu.entries[1, 3].all? { |label| menu.validations.key?(label) }
 end
 
 check "the size matching the current length is checked" do
   current = FAV.list(group, "lenx")[1]
   m = RecordingMenu.new
   MENU.build(m, nil, group, "lenx", current)
-  checked = m.entries[0, 3].select { |label| m.validations[label].call == MF_CHECKED }
+  checked = m.entries[1, 3].select do |label|
+    proc = m.validations[label]
+    proc && proc.call == MF_CHECKED
+  end
   checked.size == 1
 end
 
@@ -186,11 +198,43 @@ check "the active size is checked" do
   sub.validations["Large"].call == MF_CHECKED && sub.validations["Small"].call == MF_ENABLED
 end
 
-puts "\n--- empty list ---"
-empty, = build([])
+puts "\n--- empty list: a fresh install, which is what everyone sees first ---"
+empty, = build([], length: 450.0)
 
-check "no size entries and no separator, just the two lines" do
-  empty.entries == ["Open list...", "Text size >"]
+# The two suggestions ARE the menu on a fresh install. Dropping them left
+# "Open list..." and Text size, so a right-click offered no size to pick at all
+# until the user had gone and saved one -- and nothing on the menu said so.
+check "half and double are offered instead of an empty block" do
+  empty.entries[0, 2] == ["225.0 (x0.5)", "900.0 (x2.0)"]
+end
+
+check "each one carries its factor, so which is which is readable" do
+  empty.labels.count { |l| l =~ /\(x(0\.5|2\.0)\)/ } == 2
+end
+
+check "picking one resizes to that length" do
+  m, = build([], length: 450.0)
+  block = m.blocks["900.0 (x2.0)"]
+  next false unless block
+
+  TOOL_SPY.calls.clear
+  block.call
+  TOOL_SPY.calls.last == [:apply_dim_value, "lenx", 900.0]
+end
+
+check "no Favorite heading over a block that is not there" do
+  !empty.labels.include?("Favorite Dimensions")
+end
+
+check "then the same three actions" do
+  empty.entries[2, 4] == [:separator, "Open list...", "Show Manager", "Text size >"]
+end
+
+# A dimension of zero would suggest 0 and 0, and dividing by it to build the label
+# raises. Degenerate bounds are real: a flat selection has one.
+check "a zero-length dimension suggests nothing rather than raising" do
+  m, = build([], length: 0.0)
+  m.entries.first == :separator
 end
 
 # The callback runs through defer, which touches IS_WIN and UI.start_timer, so a
@@ -210,6 +254,92 @@ MENU.build(none, nil, nil, "lenx", 1.0)
 
 check "only Text size, since there is nothing to apply a size to" do
   none.entries == ["Text size >"]
+end
+
+puts "\n--- sizes the same component is already built at ---"
+
+# "Referenced Dimensions", another block dropped while this file was written. It
+# is the answer to "make this one the same as that one over there" without going
+# to measure it: every instance of every definition sharing this one's DC name is
+# walked and its length along the clicked axis offered, labelled "(in model)".
+#
+# Two instances of ONE definition is the whole point, so the shim had to learn
+# #instances, #parent and a real InstancePath#transformation first -- with the old
+# stub every instance measured the same and the block could never appear.
+MODEL = Sketchup.active_model
+
+def two_instances(second_scale)
+  MODEL.entities.to_a.each { |e| MODEL.entities.remove_entity(e) }
+  definition = Sketchup::ComponentDefinition.new
+  definition.bounds.add(Geom::Point3d.new(0, 0, 0), Geom::Point3d.new(450, 300, 200))
+  here = Sketchup::ComponentInstance.new
+  here.definition = definition
+  there = Sketchup::ComponentInstance.new
+  there.definition = definition
+  there.transformation = Geom::Transformation.scaling(second_scale, 1, 1)
+  MODEL.entities.add_entity(here)
+  MODEL.entities.add_entity(there)
+  MODEL.selection.clear
+  MODEL.selection.add(here)
+  [PLUG::ScalePPTool.new(nil), here]
+end
+
+check "the other instance's length is found" do
+  tool, = two_instances(2)
+  tool.referenced_dims("lenx").map(&:to_f).sort == [450.0, 900.0]
+end
+
+check "the axis clicked is the axis measured" do
+  tool, = two_instances(2)
+  tool.referenced_dims("leny").map(&:to_f).uniq == [300.0]
+end
+
+check "an unknown axis name is not a crash" do
+  tool, = two_instances(2)
+  tool.referenced_dims("lenq").empty?
+end
+
+check "the block appears with its grayed heading" do
+  tool, = two_instances(2)
+  reset_favorites!
+  m = RecordingMenu.new
+  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
+  at = m.entries.index("Referenced Dimensions")
+  at && m.validations["Referenced Dimensions"].call == MF_GRAYED &&
+    m.entries[at + 1] == "900.0 (in model)"
+end
+
+# Offering the size it already is would be a menu entry that does nothing.
+check "the current length is not offered back" do
+  tool, = two_instances(2)
+  reset_favorites!
+  m = RecordingMenu.new
+  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
+  m.labels.none? { |l| l.start_with?("450") && l.include?("in model") }
+end
+
+# Nor is one that is already in the saved list right above it.
+#
+# Saved by taking the length back off referenced_dims rather than by parsing
+# "900": DimFavorites.parse reads a bare number in MODEL units, so "900" comes
+# back as 900 mm = 35.4", which could never have matched the 900" the geometry is.
+# The first version of this check tested that unit slip and not the dedup.
+check "a size already saved is not listed twice" do
+  tool, here = two_instances(2)
+  reset_favorites!
+  other = tool.referenced_dims("lenx").find { |value| value.to_f == 900.0 }
+  FAV.add(here, "lenx", [other])
+  m = RecordingMenu.new
+  MENU.build(m, tool, here, "lenx", 450.0)
+  m.labels.none? { |l| l.include?("in model") }
+end
+
+check "one instance on its own gets no block at all" do
+  tool, = two_instances(1)
+  reset_favorites!
+  m = RecordingMenu.new
+  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
+  !m.labels.include?("Referenced Dimensions")
 end
 
 puts "\n--- result ---"

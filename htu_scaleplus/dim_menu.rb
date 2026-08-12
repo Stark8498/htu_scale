@@ -1,12 +1,21 @@
 module TRINH_VAN_PHUC::HTU_ScalePlus
   # Builds the context menu shown when right-clicking a dimension:
   #
-  #   45 mm            <- the saved sizes, checked when one is the current length
+  #   Favorite Dimensions   <- grayed heading, only above saved sizes
+  #   45 mm                 <- the saved sizes, checked when one is the current length
   #   200 mm
-  #   400 mm
   #   ---------
-  #   Open list...     add, delete, delete all -- all in one window
-  #   Text size  >     Small / Medium / Large
+  #   Referenced Dimensions <- grayed heading, only when there are any
+  #   900 mm (in model)     <- sizes this component is already built at elsewhere
+  #   ---------
+  #   Open list...          add, delete, delete all -- all in one window
+  #   Show Manager          the older Vue dimension manager
+  #   Text size  >          Small / Medium / Large
+  #
+  # With nothing saved yet, the saved block is replaced by two suggestions:
+  #
+  #   225 mm (x0.5)
+  #   900 mm (x2.0)
   #
   # One list serves all three axes, but picking a size still applies it to the
   # axis of the dimension that was right-clicked -- which is why the axis is
@@ -15,16 +24,27 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   # There used to be Add... and a Del submenu as well. Both are gone: the window
   # does each job better, because a native menu closes on the first pick and so
   # every added or deleted value cost a fresh trip through the menu.
+  #
+  # Everything else here is Curic Scale++ 1.1.2's own menu. The half/double
+  # suggestions, both headings, Referenced Dimensions and Show Manager were
+  # dropped while this file was being written and are back: on a fresh install the
+  # suggestions were the ONLY thing the menu offered, and Show Manager was the
+  # only way to open the Vue manager, which still ships.
   module DimMenu
     def self.build(menu, tool, object, axis, length)
       values = DimFavorites.list(object, axis)
 
       if object
-        add_value_items(menu, tool, axis, length, values)
-        unless values.empty?
-          menu.add_separator
+        if values.empty?
+          add_suggested_items(menu, tool, axis, length)
+        else
+          add_heading(menu, "Favorite Dimensions")
+          add_value_items(menu, tool, axis, length, values)
         end
+        add_referenced_items(menu, tool, axis, length, values)
+        menu.add_separator
         menu.add_item("Open list...") { defer { DimAddDialog.show(object, axis) } }
+        menu.add_item("Show Manager") { DimsUI.show_dialog }
       end
 
       add_text_size_submenu(menu)
@@ -38,6 +58,50 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
           value == length ? MF_CHECKED : MF_ENABLED
         end
       end
+    end
+
+    # Half and double, labelled with the factor. This is the entire menu on a
+    # fresh install, which is why losing it was worse than it looks: right-click
+    # offered nothing to click.
+    SUGGESTED_FACTORS = [0.5, 2].freeze
+
+    def self.add_suggested_items(menu, tool, axis, length)
+      unless length && length.to_f > 0
+        return
+      end
+      SUGGESTED_FACTORS.each do |factor|
+        value = (length * factor).to_l
+        label = "#{value} (x#{(value / length).round(1)})"
+        menu.add_item(label) { tool.apply_dim_value(axis, value) }
+      end
+    end
+
+    # Sizes the same component is already built at elsewhere in the model. Minus
+    # the saved ones, which are listed above, and minus the current length, which
+    # would be a no-op.
+    def self.add_referenced_items(menu, tool, axis, length, values)
+      unless tool.respond_to?(:referenced_dims)
+        return
+      end
+      lengths = tool.referenced_dims(axis).to_a - values.to_a
+      lengths = lengths.reject { |value| value == length }
+      if lengths.empty?
+        return
+      end
+      menu.add_separator
+      add_heading(menu, "Referenced Dimensions")
+      lengths.each do |value|
+        menu.add_item("#{value} (in model)") { tool.apply_dim_value(axis, value) }
+      end
+    end
+
+    # A grayed item standing in for a group label, which is how the original
+    # separated the two blocks. Both are lists of bare lengths, so without the
+    # labels there is nothing to say which is which.
+    def self.add_heading(menu, text)
+      item = menu.add_item(text) {}
+      menu.set_validation_proc(item) { MF_GRAYED }
+      item
     end
 
     def self.add_text_size_submenu(menu)

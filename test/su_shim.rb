@@ -36,6 +36,11 @@ module Sketchup
     # collection; this is shim plumbing, kept under a name no SketchUp method
     # has, so nothing can mistake it for API surface being tested.
     attr_accessor :parent_entities
+    # The real #parent: the definition (or the model) whose entities hold this
+    # one. Utils#get_path walks it to build an instance path, and without it the
+    # walk hit NoMethodError -- so "sizes this component is already built at
+    # elsewhere in the model" could not be measured at all.
+    def parent; parent_entities && parent_entities.owner; end
     def mark_deleted!; @deleted = true; self; end
   end
   class Drawingelement < Entity; end
@@ -74,11 +79,52 @@ module Sketchup
     def name; @name ||= ""; end
     def behavior; @behavior ||= Behavior.new; end
     def bounds; @bounds ||= Geom::BoundingBox.new; end
-    def entities; @entities ||= Entities.new; end
+    def entities; @entities ||= Entities.new(self); end
+    # Every definition joins the model's list on creation, the way making a group
+    # does in SketchUp. #same_dc_definition searches that list, so a shim that
+    # left it empty could only ever find nothing -- which is indistinguishable
+    # from the feature not being wired up.
+    def initialize(*)
+      super
+      Sketchup.active_model.definitions << self
+    end
+    def model; Sketchup.active_model; end
+    # Who points at this definition. Real components share one; this is what lets
+    # a test say "the same door, placed twice, at two sizes".
+    def instances; @instances ||= []; end
+    def add_instance(instance)
+      instances << instance unless instances.include?(instance)
+      instance
+    end
+    def count_used_instances; instances.count(&:valid?); end
+  end
+  # Instances are created standalone here, not from a definition the way the real
+  # API does it, so the back-link has to be made on BOTH sides: reading #definition
+  # registers an auto-created one, assigning shares an existing one. Registering
+  # only on read looked right and was not -- a test that assigned a shared
+  # definition and never read it back left #instances empty, so a walk over the
+  # instances found one object where there were two.
+  module Instantiable
+    def definition
+      unless @definition
+        @definition = ComponentDefinition.new
+      end
+      @definition.add_instance(self)
+      @definition
+    end
+    def definition=(definition)
+      @definition = definition
+      if definition.respond_to?(:add_instance)
+        definition.add_instance(self)
+      end
+      definition
+    end
   end
   class ComponentInstance < Drawingelement
     # A real instance always resolves to a definition; DimFavorites writes to both.
-    def definition; @definition ||= ComponentDefinition.new; end
+    # Assignable, because two instances of ONE definition is the whole point of a
+    # component -- and #instances has to see both of them.
+    include Instantiable
   end
   # Bounds and placement, so a selected object can be measured. Without these
   # anything that reaches compute_selected_bounds dies, which is every code path
@@ -92,7 +138,7 @@ module Sketchup
   class ComponentInstance; include Placed; end
   class Group < Drawingelement
     include Placed
-    def definition; @definition ||= ComponentDefinition.new; end
+    include Instantiable
     # The same collection the definition holds, as in the real API, so a mask set
     # through the definition and children read through the group cannot drift.
     def entities; definition.entities; end
@@ -119,7 +165,10 @@ module Sketchup
   # collection that cannot hold anything cannot test any of it.
   class Entities
     include Enumerable
-    def initialize(*); @items = []; end
+    # The definition or model that owns this collection, so an entity can answer
+    # #parent. Model already passed itself here and it was being thrown away.
+    attr_reader :owner
+    def initialize(owner = nil); @items = []; @owner = owner; end
     def each(&b); @items.each(&b); end
     def [](i); @items[i]; end
     def size; @items.size; end
@@ -178,7 +227,19 @@ module Sketchup
     def blend(_other, _weight); self; end
   end
   class ImageRep; def initialize(*); end; end
-  class InstancePath; def initialize(*); end; end
+  # A path of nested instances, outermost first. #transformation composes them,
+  # which is how a nested instance's size is read in world units -- a stub that
+  # returned nothing made every "(in model)" length come out identical.
+  class InstancePath
+    def initialize(path = []); @path = Array(path); end
+    def to_a; @path.dup; end
+    def leaf; @path.last; end
+    def transformation
+      @path.inject(Geom::Transformation.new) do |tr, instance|
+        instance.respond_to?(:transformation) ? tr * instance.transformation : tr
+      end
+    end
+  end
   # #pick is what the overlay calls on every mouse move it acts on, so a bare
   # InputPoint made the whole dispatch path untestable.
   class InputPoint

@@ -496,6 +496,43 @@ end
         d.get_attribute("dynamic_attributes", "name") == dc_name && d.attribute_dictionaries["dynamic_attributes"].keys == attributes.keys
       end
     end
+    AXIS_INDEX = { "lenx" => 0, "leny" => 1, "lenz" => 2 }.freeze
+    # Sizes this same component is already built at somewhere else in the model.
+    #
+    # Original Scale++ behaviour, offered under "Referenced Dimensions" and
+    # labelled "(in model)". It walks every instance of every definition sharing
+    # this one's dynamic_attributes name, so a door already placed at 900 is one
+    # click away instead of being measured and retyped.
+    #
+    # The definitions come back through #same_dc_definition, which needs a DC name
+    # to match on -- a plain group has none, so the walk falls back to this
+    # definition's own instances and the menu shows the sizes its siblings are at.
+    def referenced_dims(axis)
+      index = AXIS_INDEX[axis.to_s]
+      object = selected_object
+      unless index && object
+        return []
+      end
+      definitions = same_dc_definition(object.definition)
+      definitions << object.definition
+      lengths = []
+      definitions.each do |definition|
+        definition_paths(definition).each do |path|
+          instance = path.last
+          unless instance.respond_to?(:definition)
+            next
+          end
+          tr = Sketchup::InstancePath.new(path).transformation
+          line = bounds_center_lines(instance.definition.bounds, tr)[index]
+          length = line[0].distance(line[1])
+          lengths << length unless lengths.include?(length)
+        end
+      end
+      lengths
+    rescue StandardError => e
+      p(e)
+      []
+    end
     def onLButtonUp(flags, x, y, view)
     end
     # No #onSetCursor on purpose. SketchUp asks the tool on top of the stack what the
