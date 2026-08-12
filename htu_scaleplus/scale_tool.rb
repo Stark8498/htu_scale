@@ -451,6 +451,38 @@ end
         draw_dimension(view, dim, false)
       end
     end
+    # SketchUp's pre-highlight blue, for the box around the object under the cursor.
+    HOVER_BOUNDS = [0, 102, 255].freeze
+    # SketchUp pre-highlights the object under the cursor in blue -- but only while the
+    # Scale tool has NOTHING selected, i.e. while it is still asking which object to
+    # scale. With a selection live it is not asking any more and draws no box at all.
+    #
+    # Measured in both directions, a week apart. In the reference capture the status bar
+    # read "Click the item or object you want to scale" for the whole time the blue box
+    # was showing, which is what says the selection was empty and the box was
+    # SketchUp's. Then, with an object selected and being scaled, the user reported no
+    # box when hovering another one.
+    #
+    # Retargeting is exactly that second case -- a click switches the scale to the
+    # hovered object -- so with a selection live the box has to be drawn here or there
+    # is none. The empty-selection case stays SketchUp's: drawing then would put a
+    # second box on top of the one it is already drawing.
+    def draw_hover_bounds(view)
+      bb_data = @hover_bb_data
+      unless @hover_object && bb_data && bb_data[:lines]
+        return
+      end
+      if view.model.selection.empty?
+        return
+      end
+      view.line_stipple = ""
+      view.drawing_color = HOVER_BOUNDS
+      # Thinner than the selection's own yellow box (width 3), so the two never read as
+      # the same thing: one is what is being scaled, the other is what a click would
+      # scale instead.
+      view.line_width = 2
+      view.draw(GL_LINES, hack_point_draw(view, bb_data[:lines].flatten))
+    end
     # The grey grip cubes and dotted centre lines on the hovered object, the same
     # ones the selection gets. Never filled green: the fill is this plugin standing
     # in for a real grip that has stopped being drawn, and the hovered object has no
@@ -798,29 +830,16 @@ end
     end
     def onLButtonUp(flags, x, y, view)
     end
-    # The plain arrow, id 0.
+    # No #onSetCursor on purpose. SketchUp asks the tool on top of the stack what the
+    # cursor should be, and a tool that does not answer leaves whatever was set last
+    # -- the Scale tool's own arrow-with-a-grip-box. That is what the user wants back,
+    # so the way to keep it is to stay silent here.
     #
-    # If it ever comes out as some other shape, this is the single number to change:
-    # the ids belong to SketchUp and are not exposed as named constants.
-    PLAIN_CURSOR = 0
-    # The Scale tool's cursor -- an arrow with a little box and a red grip corner --
-    # is SketchUp's own, and while the native tool has the mouse there is nothing to
-    # be done about it from Ruby. But whenever THIS tool holds the stack, SketchUp
-    # asks it what the cursor should be, and a tool that does not answer leaves
-    # whatever was set last: the Scale cursor.
-    #
-    # Where this applies is exactly where that cursor is misleading. Outside the
-    # padded grip box there is no grip to drag -- a click retargets to another
-    # object -- and over a dimension label a click edits a number. Inside the grip
-    # box the native tool is in charge again and its cursor comes back, which is the
-    # one place it is telling the truth.
-    def onSetCursor
-      UI.set_cursor(PLAIN_CURSOR)
-      true
-    rescue StandardError => e
-      p(e)
-      false
-    end
+    # It was briefly answered with the plain arrow (id 0), on the reasoning that the
+    # grip cursor lies wherever this tool holds the stack: outside the padded box a
+    # click retargets, over a label it edits a number. True, and not wanted -- the icon
+    # says "Scale++ is running", which is worth more than being literal about what the
+    # next click does. See Overlay#onMouseLeave for the other half that was removed.
     def getExtents
       bb = Sketchup.active_model.bounds
       bb
@@ -1221,6 +1240,7 @@ end
         # hovering to read a size is most useful: press S, then point at things.
         if PLUGIN.show_hover_dim?
           refresh_hover(view)
+          draw_hover_bounds(view)
           draw_hover_dims(view)
           draw_hover_grips(view)
         end
@@ -1317,7 +1337,37 @@ end
       # the lock had just taken away.
       entity = view.model.selection.length == 1 ? view.model.selection[0] : nil
       lines = mask_lines(bounds_center_lines(@bb, @tr_bb), entity)
-      draw_grip_boxes(view, lines, @bb_center, true)
+      # With an axis lock the six centre-line grips ARE what SketchUp shows, so the
+      # copy is faithful and the dotted axis lines belong. With no lock SketchUp shows
+      # all 26 and drawing six instead made the grips visibly change in number the
+      # moment the cursor crossed GRIP_MARGIN -- reported as "the points blink when I
+      # move the mouse near the object". No axis lines in that case either: SketchUp
+      # draws none, so drawing three would blink in and out the same way.
+      if axis_locked?(entity)
+        draw_grip_boxes(view, lines, @bb_center, true)
+      else
+        draw_grip_boxes(view, [], @bb_center, true, all_scale_points(lines))
+      end
+    end
+    # Whether the selection is held to particular axes. Not the same question as
+    # #mask_lines answers: that keeps all three lines both for "no lock" (0) and for
+    # "xyz" (120), and those two differ in exactly the way that matters here -- xyz
+    # offers six grips, no lock offers twenty-six.
+    def axis_locked?(entity)
+      unless entity && entity.respond_to?(:definition)
+        return false
+      end
+      entity.definition.behavior.no_scale_mask? != 0
+    rescue StandardError
+      false
+    end
+    # The 26 positions SketchUp offers with no lock: eight corners, twelve edge
+    # midpoints, six face centres. #compute_bounds_for already works this set out from
+    # the mask; falling back to the centre lines keeps a box with no bb_data drawing
+    # something rather than nothing.
+    def all_scale_points(lines)
+      points = @bb_data && @bb_data[:scale_points]
+      points && !points.empty? ? points : lines.flatten
     end
     # Which of the three centre lines survive the object's own no_scale_mask. Split
     # out so the hovered object is filtered by ITS mask rather than the selection's.
@@ -1339,7 +1389,10 @@ end
         lines
       end
     end
-    def draw_grip_boxes(view, lines, center, fill)
+    # `lines` are pairs whose endpoints get a grip AND a dotted axis line between them.
+    # `loose_points` get a grip and nothing else, for the no-lock set where SketchUp
+    # draws no axis lines.
+    def draw_grip_boxes(view, lines, center, fill, loose_points = nil)
       box_lines = {}
       d = view.pixels_to_model(8, center)
       view.line_width = 1
@@ -1354,6 +1407,16 @@ end
           box_lines[line] ||= []
           box_lines[line] << box2d
         end
+      end
+      Array(loose_points).each do |point|
+        box = create_box(point.to_a, d)
+        box2d = box.map do |face|
+          face.map { |pt| view.screen_coords(pt) }
+        end
+        # Keyed by the point itself so each grip gets its own entry; the drawing loop
+        # below reads the key back as a line, so a one-point key must draw no axis.
+        box_lines[[point]] ||= []
+        box_lines[[point]] << box2d
       end
       # Only when there is no real grip underneath to bury. Two cases where there
       # is not: this tool holds the stack, which suspends the Scale tool, and any
@@ -1373,14 +1436,15 @@ end
       # is painted and the real grips show through. That is what keeps this from
       # ever burying a real grip, including the colour it turns under the cursor.
       #
-      # Known limit, and it predates this: what gets drawn is the six face grips
-      # #bounds_center_lines produces. With a lock on that is exactly what
-      # SketchUp shows too, so the copy is faithful. With no lock the real tool
-      # shows all 27 and the other 21 are simply absent for the duration -- the
-      # same partial copy this already drew whenever it held the stack.
-      #
       # `fill` is decided by the caller now: the selection's grips fill when there
       # is no real grip underneath, the hovered object's never do.
+      #
+      # This used to draw only the six centre-line grips whatever the mask said, and
+      # noted it as a known limit: with no lock SketchUp shows 26 and the other 20 were
+      # absent for as long as this tool held the stack. That is not a cosmetic gap --
+      # the cursor crosses GRIP_MARGIN constantly while approaching the object, and
+      # every crossing swapped 26 grips for 6. #draw_scale_points now passes the set
+      # the mask actually calls for.
       box_lines.each do |line, box2ds|
         view.line_stipple = ""
         box2ds.each do |box2d|
@@ -1394,6 +1458,11 @@ end
           box2d.each do |f|
             view.draw2d(GL_LINE_LOOP, f)
           end
+        end
+        # A loose point keys a one-element "line", and GL_LINES with a single vertex
+        # draws nothing useful -- skip rather than hand OpenGL half a segment.
+        if line.length < 2
+          next
         end
         view.line_stipple = "."
         view.drawing_color = "gray"

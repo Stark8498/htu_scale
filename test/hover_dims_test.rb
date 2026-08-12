@@ -463,6 +463,79 @@ check "the hovered object gets grip cubes too" do
   d2.count { |mode, _, _| mode == GL_LINE_LOOP } == 6 * 6
 end
 
+# SketchUp pre-highlights the object under the cursor in blue, but only while the
+# Scale tool has nothing selected -- while it is still asking which object to scale.
+# With a selection live it is not asking, and draws no box. Retargeting is exactly
+# that case, so the box has to come from here or there is none: reported as "no blue
+# highlight when hovering another object while scaling".
+def hover_bounds_lines(tool)
+  d3, _d2 = drawn(tool)
+  d3.select { |mode, _, color| mode == GL_LINES && color == TOOL::HOVER_BOUNDS }
+end
+
+check "with an object being scaled, the hovered one gets a box" do
+  tool = hover_tool
+  selected(box(10, 10, 10))
+  under_cursor(box(100, 60, 30))
+  tool.update_hover(500, 400, VIEW)
+  # Twelve edges of a box, two points each.
+  lines = hover_bounds_lines(tool)
+  lines.length == 1 && lines.first[1].length == 24
+end
+
+check "and it is the hovered object's box, not the selection's" do
+  tool = hover_tool
+  selected(box(10, 10, 10))
+  target = box(100, 60, 30)
+  under_cursor(target)
+  tool.update_hover(500, 400, VIEW)
+  line = hover_bounds_lines(tool).first
+  points = line && line[1]
+  # The 2px camera-ward offset in #hack_point_draw is why this compares extents
+  # rather than corners.
+  spread = points && [0, 1, 2].map { |i| points.map { |pt| pt[i] }.minmax.reverse.reduce(:-).round }
+  spread ? spread.sort == [30, 60, 100] : false
+end
+
+check "with nothing selected there is none, that box is SketchUp's" do
+  tool = hover_tool
+  selected
+  under_cursor(box(100, 60, 30))
+  tool.update_hover(500, 400, VIEW)
+  hover_bounds_lines(tool).empty?
+end
+
+check "and none once there is nothing under the cursor" do
+  tool = hover_tool
+  selected(box(10, 10, 10))
+  under_cursor(box(100, 60, 30))
+  tool.update_hover(500, 400, VIEW)
+  under_cursor(nil)
+  tool.update_hover(300, 300, VIEW)
+  hover_bounds_lines(tool).empty?
+end
+
+# It must not be mistaken for the selection's own box: one is what is being scaled,
+# the other is what a click would scale instead. Each recorded draw carries the colour
+# AND the width in force, so both halves of that are checkable here.
+check "in blue, thinner than the yellow box on the object being scaled" do
+  tool = hover_tool
+  selected(box(10, 10, 10))
+  target = box(100, 60, 30)
+  under_cursor(target)
+  tool.update_hover(500, 400, VIEW)
+  d3, _d2 = drawn(tool)
+  hover = d3.find { |mode, _, color, _| mode == GL_LINES && color == TOOL::HOVER_BOUNDS }
+  # The selection's own box comes from a later part of the frame, behind the @dims
+  # guard #draw returns on here, so it is asked for directly rather than faked.
+  tool.instance_variable_set(:@bb, target.local_bounds)
+  tool.instance_variable_set(:@tr_bb, Geom::Transformation.new)
+  $SU_CALLS[:draw].clear
+  tool.draw_selected_bounds(VIEW)
+  own = $SU_CALLS[:draw].find { |mode, _, color, _| mode == GL_LINES && color == "yellow" }
+  hover && own && hover[3] == 2 && own[3] == 3
+end
+
 # The green fill is this plugin standing in for a real grip that stopped being
 # drawn. SketchUp draws its own grips on the object it is pre-highlighting, so a
 # fill here would bury them -- and claim the object is the scale target when it

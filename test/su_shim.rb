@@ -360,18 +360,22 @@ module Sketchup
     def inference_locked?; false; end
     def lock_inference(*); self; end
     def tooltip=(_t); _t; end
-    def line_width=(_w); _w; end
+    # Remembered like the colour, and for the same reason: width is how two boxes
+    # drawn in the same pass are told apart. The selection's own box is yellow at 3,
+    # the hovered object's is blue at 2, and a shim that dropped the width could only
+    # ever check "some width was set", which stays true however wrong it is.
+    def line_width=(w); @line_width = w; end
     def line_stipple=(_s); _s; end
     # The colour is remembered rather than discarded, so a recorded draw call
     # carries the colour in force when it was made. Whether a shape is filled
     # or only outlined is otherwise invisible to a test.
     def drawing_color=(c); @drawing_color = c; end
     def draw(mode = nil, points = nil, *)
-      $SU_CALLS[:draw] << [mode, points, @drawing_color]
+      $SU_CALLS[:draw] << [mode, points, @drawing_color, @line_width]
       self
     end
     def draw2d(mode = nil, points = nil, *)
-      $SU_CALLS[:draw2d] << [mode, points, @drawing_color]
+      $SU_CALLS[:draw2d] << [mode, points, @drawing_color, @line_width]
       self
     end
     def draw_points(*); self; end

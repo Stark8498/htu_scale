@@ -10,10 +10,6 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       start
     end
     def onMouseMove(flags, x, y, view)
-      # Before the dedupe below and before the navigation guard, because it is the
-      # cheapest call in the file and the one that has to happen on every frame the
-      # cursor could be repainted.
-      set_plain_cursor
       if @mouse && @mouse == [x, y]
         return
       end
@@ -100,41 +96,20 @@ end
     end
     def onMouseEnter(flags, x, y, view)
       @mouse = [x, y]
-      set_plain_cursor
     end
-    # Taking the Scale tool's cursor -- the arrow with a little box and a red grip
-    # corner -- away everywhere, not only where ScalePPTool#onSetCursor can reach.
+    # The Scale tool's cursor -- the arrow with a little box and a red grip corner --
+    # is SketchUp's, and it stays. This overlay used to overwrite it with the plain
+    # arrow on every mouse move; the user asked for the icon back, so nothing here
+    # touches the cursor any more. The gate in navigation_test.rb holds it that way.
     #
-    # That method only gets asked while this tool is on top of the stack, so the box
-    # came straight back the moment the cursor entered the grip area. The way past
-    # that is the same one the whole plugin rests on: an overlay is handed mouse
-    # moves whichever tool is active, and UI.set_cursor is a plain global call, not
-    # something only a callback may make. So the cursor can be overwritten on the
-    # frames where the NATIVE Scale tool owns the mouse too.
-    #
-    # Whether it sticks is up to SketchUp: if the native tool answers the cursor
-    # question after this runs, the last writer wins and this loses. A cursor can
-    # only be measured by looking at it, so that is how this was checked.
-    #
-    # Two things it deliberately does not touch: any tool other than Scale (the
-    # Select, Move and Rotate cursors are not this plugin's business), and anything
-    # during a camera move, where orbit and pan have cursors of their own that mean
-    # something.
-    def set_plain_cursor
-      unless enabled?
-        return false
-      end
-      unless @dim_scale && @dim_scale.active?
-        return false
-      end
-      if PLUGIN.navigating?
-        return false
-      end
-      UI.set_cursor(ScalePPTool::PLAIN_CURSOR)
-      true
-    rescue StandardError
-      false
-    end
+    # Worth keeping because it took a while to find, and because putting it back is a
+    # ten-line job: UI.set_cursor is a plain GLOBAL call, not something only a
+    # callback may make, and an overlay is handed mouse moves whichever tool is
+    # active. So calling it from #onMouseMove reaches even the frames where the
+    # NATIVE Scale tool owns the mouse -- which ScalePPTool#onSetCursor could not,
+    # since SketchUp only asks the tool on TOP of the stack. If it ever comes back it
+    # must skip camera moves (orbit and pan have cursors that mean something) and any
+    # tool other than Scale.
     def onMouseLeave(view)
     end
     def register_tool(tool)

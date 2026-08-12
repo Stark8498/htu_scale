@@ -114,27 +114,32 @@ kích thước thì phải áp vào đúng trục vừa bấm — chỉ chỗ *l
 **Retarget** — đang scale vật A, click sang vật B là scale B luôn, click chỗ trống là
 bỏ chọn. `pick_object` chỉ nhận group/component chưa khoá.
 
-**Con trỏ** — icon Scale (mũi tên kèm ô vuông có góc đỏ) là **của SketchUp**; plugin trước
-đây không có một dòng code cursor nào. Bỏ nó cần **hai** chỗ, và chỗ thứ hai mới là chỗ ăn
-tiền:
+**Con trỏ — plugin KHÔNG chạm vào, cố ý.** Icon Scale (mũi tên kèm ô vuông có góc đỏ) là của
+SketchUp và nó **giữ nguyên**: người dùng nhìn nó để biết Scale++ đang bật.
 
-1. `ScalePPTool#onSetCursor` → `UI.set_cursor(PLAIN_CURSOR)`. SketchUp hỏi tool ở **đỉnh
-   stack** về con trỏ; không trả lời thì nó giữ con trỏ đặt lần cuối, tức icon Scale. Nhưng
-   cái này chỉ với tới được lúc tool giữ stack.
-2. `ScalePP2Overlay#set_plain_cursor`, gọi từ `onMouseMove` / `onMouseEnter`. **Đây là chỗ
-   tôi ban đầu kết luận sai là "không làm được".** Lý do làm được: overlay nhận mouse move
-   **bất kể tool nào đang chạy** (đúng cơ chế nền ở §3), và `UI.set_cursor` là **lệnh
-   global**, không phải thứ chỉ callback mới được gọi. Nên ghi đè được cả những frame mà
-   Scale tool **gốc** đang cầm chuột — tức cả trong vùng grip.
+Nó từng bị thay bằng mũi tên trơn theo yêu cầu, rồi người dùng đổi ý xin hiện lại
+("cho hiện trở lại miễn scale++ đang bật"). Đã xoá cả hai nửa. Gate `navigation_test.rb`
+mục "the cursor stays SketchUp's" chốt là plugin **không đặt con trỏ ở đâu cả** — đáng có
+gate chứ không chỉ comment, vì bản đã xoá gồm **hai** call ở **hai** file, vô tình dựng lại
+một nửa rất dễ. Mục đó có cả positive control (`UI.set_cursor` phải được shim ghi lại), vì
+mọi check còn lại đều assert danh sách **rỗng** — thứ mà một shim ngừng ghi cũng cho ra.
 
-Gọi **trước** cả dedupe `@mouse == [x, y]` trong `onMouseMove`: chuột không dịch nhưng
-native tool vẫn có thể vừa vẽ lại con trỏ của nó. Không đụng vào: tool khác Scale (con trỏ
+Giữ lại kiến thức, vì tìm ra nó mất công và dựng lại chỉ là việc mười dòng:
+
+1. `ScalePPTool#onSetCursor`. SketchUp hỏi tool ở **đỉnh stack** về con trỏ; **không trả lời
+   thì nó giữ con trỏ đặt lần cuối**, tức icon Scale. Đó chính là cách giữ icon hiện nay:
+   im lặng. Trả lời là mất icon.
+2. `Overlay#onMouseMove` gọi `UI.set_cursor` trực tiếp. **Đây là chỗ tôi ban đầu kết luận
+   sai là "không làm được".** Lý do làm được: overlay nhận mouse move **bất kể tool nào đang
+   chạy** (§3), và `UI.set_cursor` là **lệnh global**, không phải thứ chỉ callback mới được
+   gọi — nên với tới được cả frame mà Scale tool **gốc** đang cầm chuột, tức cả trong vùng
+   grip, chỗ `onSetCursor` không tới được.
+
+Nếu có ngày cần lại: gọi **trước** dedupe `@mouse == [x, y]` (chuột không dịch nhưng native
+tool vẫn có thể vừa vẽ lại con trỏ), và bỏ qua hai ca — tool khác Scale (con trỏ
 Select/Move/Rotate không phải việc của plugin) và suốt lúc camera di chuyển (orbit/pan có
-con trỏ riêng mang nghĩa riêng).
-
-Ai thắng thì do SketchUp quyết: nếu native tool trả lời câu hỏi con trỏ **sau** khi cái này
-chạy thì người ghi sau thắng và cái này thua. Con trỏ chỉ đo được bằng cách nhìn. Nếu id 0
-ra hình lạ thì `PLAIN_CURSOR` là một con số duy nhất cần sửa.
+con trỏ riêng mang nghĩa riêng). Ai thắng do SketchUp quyết: native tool trả lời **sau** thì
+người ghi sau thắng. Con trỏ chỉ đo được bằng cách nhìn.
 
 **Số đo của vật đang trỏ tới (hover)** — đang bật Scale, rê chuột qua một vật là hiện
 kích thước của **vật đó**, không cần chọn. Nút `Toggle hover dimensions` (icon
@@ -213,11 +218,26 @@ trỏ **đầy đủ**, và bản xám đọc ra như một tính năng khác, k
 `hover_dims_test.rb` chốt lại phần nhìn này. Lần thứ năm suy luận về mặt nhìn ở plugin này
 thua đo — xem §9.
 
-**Không vẽ khung bao**, và đây cũng là đo được: khi selection rỗng, **Scale tool của
-SketchUp tự vẽ khung xanh quanh vật dưới con trỏ** (pre-highlight). Bằng chứng: suốt cả
-đoạn hover trong video, status bar giữ nguyên *"Click the item or object you want to
-scale"* — tức không có gì được chọn, nên khung xanh đậm đó là của SketchUp. Vẽ thêm khung
-nữa chỉ là đè lên khung nó đang vẽ.
+**Khung bao xanh: vẽ khi ĐANG có selection, không vẽ khi selection rỗng.** SketchUp
+pre-highlight vật dưới con trỏ bằng khung xanh **chỉ khi Scale tool chưa có gì được chọn**,
+tức lúc nó còn đang hỏi "scale cái nào". Có selection rồi thì nó không hỏi nữa và không vẽ
+gì cả.
+
+Đo hai chiều, cách nhau một tuần:
+
+| | bằng chứng | ai vẽ |
+|---|---|---|
+| selection **rỗng** | suốt đoạn hover trong video, status bar giữ nguyên *"Click the item or object you want to scale"* | **SketchUp** — vẽ thêm chỉ là đè lên khung nó đang vẽ |
+| selection **có vật** | người dùng báo *"không thấy highlight xanh khi hover đối tượng khác khi scale"*, kèm ảnh có grip và số đo | **không ai** → `draw_hover_bounds` |
+
+Retarget nằm đúng ở hàng thứ hai (click là chuyển scale sang vật đang trỏ), nên khung phải
+do plugin vẽ hoặc không có khung nào. Kết luận cũ ("không vẽ khung bao") **đúng phần điều
+kiện, sai phần phạm vi** — nó chỉ đo được hàng trên.
+
+`HOVER_BOUNDS = [0, 102, 255]`, `line_width = 2` — mảnh hơn khung vàng width 3 của vật đang
+scale, để hai thứ không đọc thành một: một cái là vật đang scale, cái kia là vật mà một cú
+click sẽ scale thay thế. Shim giờ ghi **cả độ dày** vào mỗi lời gọi draw, nếu không thì check
+chỉ nói được "có set độ dày nào đó" — câu luôn đúng dù sai thế nào.
 
 Grip của vật đang trỏ **không bao giờ tô xanh lá** (`GRIP_FILL`). Tô là cách plugin đóng
 thế cho grip thật đã ngừng được vẽ; vật đang trỏ thì SketchUp vẫn đang vẽ grip thật của
@@ -390,10 +410,34 @@ nhìn như đã rời Scale tool.
 `navigating?` hỏi stack **thật**, nên cả hai tắt ngay ở đúng frame SketchUp vẽ lại — không
 có khoảng nào vẽ đè. Đây là lý do không dùng cờ `@navigating` của observer (tắt trễ một tick).
 
-**Giới hạn, có từ trước:** thứ tô là 6 grip mặt do `bounds_center_lines` sinh ra. Đang khoá
-trục thì đúng bằng những gì SketchUp hiện. Không khoá thì tool gốc hiện đủ 27 và 21 cái còn
-lại vắng mặt suốt lúc di chuyển camera — đúng bản copy thiếu mà chỗ này vẫn vẽ mỗi khi giữ
-stack, không phải hồi quy mới.
+**Bộ grip thay thế phải ĐÚNG SỐ LƯỢNG** — đây từng được ghi ngay ở đây như "giới hạn, có từ
+trước, không phải hồi quy mới": thứ vẽ là 6 grip mặt do `bounds_center_lines` sinh ra, còn
+khi không khoá trục thì SketchUp hiện đủ 26. Nó không phải chuyện thẩm mỹ. Con trỏ băng qua
+`GRIP_MARGIN` liên tục trong lúc tiến về phía vật, **mỗi lần băng qua là 26 grip đổi thành
+6** — người dùng báo là *"rê chuột lại gần đối tượng đang scale thì nháy điểm"*.
+
+`compute_bounds_for` **vốn đã** tính sẵn đúng bộ theo mask, chỉ là `draw_scale_points` không
+dùng. Đo được:
+
+| behavior | SketchUp vẽ | plugin vẽ (trước) | plugin vẽ (giờ) |
+|---|---|---|---|
+| all (mặc định) | 26 | **6** | 26 |
+| xyz | 6 | 6 | 6 |
+| x / y / z | 2 | 2 | 2 |
+
+26 = 8 góc + 12 trung điểm cạnh + 6 tâm mặt, tức `bb_data[:scale_points]`. Đường kẻ đứt của
+trục cũng cùng câu hỏi: SketchUp vẽ một đường dọc trục đang khoá và **không vẽ gì** khi không
+khoá, nên 3 đường lúc không khoá cũng nháy ở đúng cái mép đó. `axis_locked?` tách hai ca mà
+`mask_lines` gộp (0 và 120 đều giữ cả 3 line, nhưng 0 cho 26 grip còn 120 cho 6).
+
+`draw_grip_boxes` nhận thêm `loose_points`: điểm chỉ có khối vuông, không có đường trục.
+Khoá `[point]` một phần tử, và vòng vẽ bỏ qua `GL_LINES` khi `line.length < 2` — đưa OpenGL
+nửa đoạn thẳng thì nó vẽ ra thứ không ai đoán được.
+
+Gate: `retarget_test.rb` mục "the grips must not read as switched off", 5 check đọc số từ
+`bb_data[:scale_points]` **và** từ số khối vẽ ra, nên lệch một bên là đỏ. Fixture cũ đưa tool
+một `BoundingBox` **rỗng** và `bb_data` chỉ có `:points`, tức mọi check ở đó đang đo nhánh
+fallback chứ không phải code chạy thật — đã đổi sang selection thật + `store_bounds_points`.
 
 **Grip thay thế** — `draw_scale_points` vẽ **toàn bộ hoặc không gì cả**, theo đúng một
 điều kiện: `active_itself? || navigating?`, tức "SketchUp đang không vẽ grip thật". Lúc đó
@@ -639,13 +683,34 @@ bước đó.
 
 ## 8. Việc còn treo
 
-**Đã commit, chưa push.** Branch `scale-group-lock-and-navigation`, 5 commit trên
-`cd9395b`, kết thúc ở `f754d83`. `main` vẫn ở `cd9395b`. Remote là
+**Ba nhánh, ba mốc lùi khác nhau:**
+
+| nhánh | ở đâu | là gì |
+|---|---|---|
+| `original-curic-scale-pp-1.1.2` | `523a22d`, **root commit riêng, không parent** | Curic Scale++ 1.1.2 **y nguyên bản ship**, 157 file từ `curic_scale++.rbz` (md5 `1f11ebe7…`). Cài được, **đọc không được**: cả 29 file `.rb` là payload RubyEncoder v3.0.1 nạp qua `rgloader/`. Source đọc được ở các nhánh khác là đã giải mã từ đây |
+| `main` | `cd9395b` | source đã giải mã, đổi tên HTU ScalePlus, bỏ license check — **chưa có custom chức năng nào**. Đây là mốc lùi để *đọc và làm lại*, khác với mốc trên là để *cài lại* |
+| `scale-group-lock-and-navigation` | `2d0b397` | nhánh làm việc, 6 commit |
+
+Đóng gói lại bản gốc mà không cần checkout:
+
+```
+git archive --format=zip -o curic_scale_pp-1.1.2.rbz original-curic-scale-pp-1.1.2
+```
+
+Nhánh gốc **không có parent** là cố ý: nó không phái sinh từ gì trong repo này, vì chính
+`cd9395b` đã là bản giải mã + đổi tên. Diff vẫn được:
+`git diff original-curic-scale-pp-1.1.2 main`.
+
+**Đã commit, chưa push.** Branch `scale-group-lock-and-navigation`, 6 commit trên
+`cd9395b`, kết thúc ở `2d0b397`. `main` vẫn ở `cd9395b`. Remote là
 `origin https://github.com/Stark8498/htu_scale.git` — **chưa push, cố ý**: đẩy lên repo
 public là việc ra ngoài, để người dùng quyết. `dist/` nằm trong `.gitignore` (nửa MB
 binary tái tạo được bằng `ruby build.rb`). Version đã lên **1.2**.
 
-Phần hover dimensions (§4) làm sau 5 commit đó và **chưa commit**.
+`2d0b397` gom cả đợt 2026-08-12: hover dimensions, con trỏ, Ctrl+A, fix khoá trục lần đầu,
+grip all-or-nothing, guard nhãn z, và bản reloader tự sync. Handoff riêng của đợt đó —
+báo lỗi nào dẫn tới sửa gì, cái gì chưa kiểm trong SketchUp thật — ở
+[HANDOFF-2026-08-12.md](HANDOFF-2026-08-12.md).
 
 **Grip lúc orbit / pan: ĐÃ XONG, người dùng xác nhận trên SU 2026.** Cả grip xanh lẫn viền
 vàng đều còn nguyên khi orbit và khi pan. Giữ nguyên phần dưới vì nó là hồ sơ cách tìm ra,

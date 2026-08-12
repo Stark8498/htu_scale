@@ -595,13 +595,17 @@ check "each release asks again" do
   end
 end
 
-puts "\n--- the cursor, on frames the native tool owns ---"
+puts "\n--- the cursor stays SketchUp's ---"
 
-# ScalePPTool#onSetCursor only gets asked while this tool is on top of the stack, so
-# the Scale tool's arrow-with-a-grip-box came straight back wherever the native tool
-# had the mouse. The way past that is the mechanism the whole plugin rests on: an
-# overlay is handed mouse moves whichever tool is active, and UI.set_cursor is a
-# plain global call rather than something only a callback may make.
+# The Scale cursor -- the arrow with a little box and a red grip corner -- is what says
+# "Scale++ is running", and the user asked for it back after it had been replaced with
+# the plain arrow. Nothing in the plugin may set a cursor now, and that is a rule worth
+# a gate rather than a comment: the removed version was TWO calls in two files, so
+# putting either one back by accident is easy.
+#
+# The knowledge that made it possible is in Overlay#onMouseLeave: UI.set_cursor is a
+# global call, and an overlay gets mouse moves whichever tool is active, so it reaches
+# frames the native tool owns. Kept there for whoever wants it back on purpose.
 def cursor_overlay(tool_name)
   overlay = PLUG::ScalePP2Overlay.new
   overlay.enabled = true
@@ -612,34 +616,35 @@ def cursor_overlay(tool_name)
   overlay
 end
 
-check "a move relayed by the overlay overwrites the Scale cursor" do
-  cursor_overlay("ScaleTool").onMouseMove(0, 500, 400, MODEL.active_view)
-  $SU_CALLS[:set_cursor] == [TOOL::PLAIN_CURSOR]
-end
-
-# The dedupe in #onMouseMove exists to skip work when the pointer has not moved --
-# but the native tool may still have repainted its cursor, so this one call has to
-# happen ahead of it.
-check "and does so even on a move the overlay otherwise skips" do
-  overlay = cursor_overlay("ScaleTool")
-  overlay.onMouseMove(0, 500, 400, MODEL.active_view)
+check "the shim would notice a cursor being set, or this proves nothing" do
+  # Positive control. Every check below asserts an EMPTY list, which is also what a
+  # shim that had quietly stopped recording would give.
   $SU_CALLS[:set_cursor].clear
-  overlay.onMouseMove(0, 500, 400, MODEL.active_view)
-  $SU_CALLS[:set_cursor] == [TOOL::PLAIN_CURSOR]
+  UI.set_cursor(0)
+  recorded = $SU_CALLS[:set_cursor] == [0]
+  $SU_CALLS[:set_cursor].clear
+  recorded
 end
 
-# Orbit and pan have cursors of their own that mean something, and they are not this
-# plugin's to take.
-check "but not while the camera is being dragged" do
-  cursor_overlay("CameraOrbitTool").onMouseMove(0, 501, 401, MODEL.active_view)
+check "a mouse move over the Scale tool sets no cursor" do
+  cursor_overlay("ScaleTool").onMouseMove(0, 500, 400, MODEL.active_view)
   $SU_CALLS[:set_cursor].empty?
 end
 
-# Nor is the Select, Move or Rotate cursor this plugin's business.
-check "nor when the Scale tool is not the one running" do
-  overlay = cursor_overlay("SelectionTool")
-  overlay.dim_scale.instance_variable_set(:@active, false)
-  overlay.onMouseMove(0, 502, 402, MODEL.active_view)
+check "nor does entering the viewport" do
+  cursor_overlay("ScaleTool").onMouseEnter(0, 500, 400, MODEL.active_view)
+  $SU_CALLS[:set_cursor].empty?
+end
+
+# The other half that was removed: SketchUp asks the tool on top of the stack, and this
+# tool must leave that question unanswered so the last cursor set -- the Scale one --
+# stands. Answering it at all is what took the icon away.
+check "and the tool leaves SketchUp's cursor question unanswered" do
+  !TOOL.new(nil).respond_to?(:onSetCursor)
+end
+
+check "a camera drag sets none either" do
+  cursor_overlay("CameraOrbitTool").onMouseMove(0, 501, 401, MODEL.active_view)
   $SU_CALLS[:set_cursor].empty?
 end
 
