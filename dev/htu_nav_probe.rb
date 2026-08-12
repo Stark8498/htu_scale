@@ -39,7 +39,9 @@
 #   grips>0 fill=true              -> it IS being painted; the problem is elsewhere.
 
 module HTU_NavProbe
-  P = TRINH_VAN_PHUC::HTU_ScalePlus
+  # Same reason as in htu_hover_probe.rb: this file is loaded again after every
+  # reload, and a plain assignment warns each time.
+  P = TRINH_VAN_PHUC::HTU_ScalePlus unless defined?(P)
 
   class << self
     attr_accessor :overlay_draws, :grip_draws, :last_fill

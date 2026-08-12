@@ -1,7 +1,7 @@
 module TRINH_VAN_PHUC::HTU_ScalePlus
   class << self
     attr_accessor(:active)
-    attr_reader(:cmd_reset, :cmd_xyz, :cmd_x, :cmd_y, :cmd_z, :cmd_dim, :cmds)
+    attr_reader(:cmd_reset, :cmd_xyz, :cmd_x, :cmd_y, :cmd_z, :cmd_dim, :cmd_hover_dim, :cmds)
   end
   BEHAVIOR_SECTION = "htu_behavior".freeze
   BEHAVIOR_ALL = 0
@@ -29,8 +29,34 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
     end
     Sketchup.write_default(BEHAVIOR_SECTION, "state", state)
     apply_behavior
-    Sketchup.send_action("selectScaleTool:")
+    repick_scale_tool
     state
+  end
+
+  # Forces SketchUp's Scale tool to read the mask again.
+  #
+  # It does not re-read no_scale_mask while it stays the active tool, and
+  # send_action("selectScaleTool:") on the tool that is ALREADY running is a no-op.
+  # So the mask #apply_behavior had just written was never picked up: the first press
+  # of a behaviour button did nothing visible, and pressing a second button and
+  # coming back looked like the fix -- that press happened to land while a different
+  # tool held the stack, which turned the re-pick into a real tool change.
+  #
+  # Out through Select and straight back is a real change every time. The two places
+  # that could never afford to get this wrong -- ScalePPTool#apply_dim_value and
+  # dims.rb -- have always done exactly this. set_behavior was the odd one out.
+  def self.repick_scale_tool
+    model = Sketchup.active_model
+    # The trip through Select is a tool change as far as the observer can tell, and
+    # unwrapping there would explode the wrapper the user is still scaling and cost
+    # two undo steps for one button press. Only this deliberate round trip is
+    # excused; a real departure still unwraps.
+    GroupLock.suspend { model.select_tool(nil) }
+    Sketchup.send_action("selectScaleTool:")
+    true
+  rescue StandardError => e
+    p(e)
+    false
   end
 
   # Applies the remembered mode to a component as it is selected, so a new file
@@ -63,6 +89,17 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   end
   def self.show_dim?
     Sketchup.read_default(PLUGIN_NAME, "show_dim", true)
+  end
+  # Dimensions on whatever the cursor is over, as opposed to show_dim? which is
+  # the dimensions of what is selected. Separate preference because they answer
+  # different questions -- "how big is the thing I am scaling" against "how big
+  # is that one" -- and a busy model is where someone is most likely to want the
+  # second one off while keeping the first.
+  def self.toggle_hover_dimensions
+    Sketchup.write_default(PLUGIN_NAME, "hover_dim", !show_hover_dim?)
+  end
+  def self.show_hover_dim?
+    Sketchup.read_default(PLUGIN_NAME, "hover_dim", true)
   end
   def self.build_commands
     all = 0
@@ -114,6 +151,32 @@ end
         MF_ENABLED
       end
     end
+    # No re-pick of the Scale tool here, unlike the toggle above: nothing is
+    # recomputed by turning this on or off, the next mouse move rebuilds the
+    # labels by itself, and re-picking the tool would drop a typed dimension.
+    @cmd_hover_dim = UI::Command.new("Toggle hover dimensions") do
+  toggle_hover_dimensions
+  begin
+    overlay = PLUGIN.active_overlay
+    tool = overlay && overlay.dim_scale
+    if tool && !show_hover_dim?
+      tool.clear_hover
+    end
+    Sketchup.active_model.active_view.invalidate
+  rescue StandardError => e
+    p(e)
+  end
+end
+    @cmd_hover_dim.small_icon = File.join(PATH_R, "snapping_length.png")
+    @cmd_hover_dim.large_icon = File.join(PATH_R, "snapping_length.png")
+    @cmd_hover_dim.tooltip = "Show dimensions of the object under the cursor"
+    @cmd_hover_dim.set_validation_proc do
+      if show_hover_dim?
+        MF_CHECKED
+      else
+        MF_ENABLED
+      end
+    end
     cmds = {}
     cmds[@cmd_reset] = all
     cmds[@cmd_xyz] = xyz
@@ -131,6 +194,7 @@ end
       end
     end
     cmds[@cmd_dim] = 0
+    cmds[@cmd_hover_dim] = 0
     @cmds = cmds
   end
   def self.toggle

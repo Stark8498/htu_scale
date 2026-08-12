@@ -141,6 +141,19 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
             margin: 0; padding: 12px;
             display: flex; flex-direction: column; height: 100vh;
             box-sizing: border-box;
+            /* An HtmlDialog is a browser, so Ctrl+A did what a browser does: it
+               selected every word on the page -- heading, buttons, the whole list
+               -- and left it all highlighted blue. In a window that looks like a
+               dialog that reads as a bug, and there is nothing useful to do with
+               the selection afterwards. */
+            user-select: none;
+            -webkit-user-select: none;
+          }
+          /* The entry field keeps normal text behaviour: Ctrl+A there means
+             "select what I typed", which is worth having. */
+          input {
+            user-select: text;
+            -webkit-user-select: text;
           }
           h1 { font-size: 12px; font-weight: 600; margin: 0 0 8px; opacity: .6;
                text-transform: uppercase; letter-spacing: .04em; }
@@ -224,6 +237,17 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
         };
         document.getElementById('all').onclick = function () { sketchup.removeAll(); };
         document.getElementById('close').onclick = function () { sketchup.closeDialog(); };
+        // user-select alone stops the highlight from being visible, but the
+        // selection still happens and Ctrl+A still counts as handled. Cancelling it
+        // outright keeps the keystroke from doing anything at all -- except in the
+        // entry field, where selecting the typed text is exactly what it should do.
+        document.addEventListener('keydown', function (e) {
+          if (!(e.ctrlKey || e.metaKey) || (e.key !== 'a' && e.key !== 'A')) { return; }
+          var el = e.target;
+          var tag = el && el.tagName;
+          if (tag === 'INPUT' || tag === 'TEXTAREA') { return; }
+          e.preventDefault();
+        });
         window.addEventListener('load', function () {
           sketchup.ready();
           document.getElementById('value').focus();

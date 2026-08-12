@@ -74,7 +74,11 @@ puts "  ruby -c            : OK (#{Dir.glob(File.join(ROOT, '**', '*.rb')).size}
   "behavior test"      => "test/behavior_test.rb",
   "group lock test"    => "test/group_lock_test.rb",
   "navigation test"    => "test/navigation_test.rb",
+  "hover dims test"    => "test/hover_dims_test.rb",
   "text size test"     => "test/text_size_persistence_test.rb",
+  # Not shipped, but it decides which files reach SketchUp during every test round,
+  # and when its file list goes stale it says "reloaded" and skips one in silence.
+  "reload tool test"   => "test/reload_tool_test.rb",
 }.each do |label, script|
   out = `"#{RUBY}" "#{File.join(ROOT, script)}" 2>&1`
   abort "ABORT: #{label} failed\n#{out}" unless $?.success?

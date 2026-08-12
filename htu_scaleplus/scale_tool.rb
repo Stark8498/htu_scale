@@ -92,10 +92,21 @@ end
       @state = nil
     end
     def deactivate(view)
+      # SketchUp calls this for two very different things, and they must not be
+      # treated alike: the user leaving the Scale tool, and this tool being popped
+      # off the stack after its own push. The second happens constantly -- every
+      # time the cursor comes back over the grips, #call_back pops it.
+      pushed = @on_push_tool
       if @on_push_tool
         @on_push_tool = false
       end
       unlock_axis
+      # So only on a real departure. Clearing on a pop wiped the hover labels on
+      # the same mouse event that had just computed them, every time the cursor
+      # crossed back into the selection's padded box.
+      unless pushed
+        clear_hover(view)
+      end
       @selected = []
       store_bounds_points
     end
@@ -250,6 +261,217 @@ end
       view.invalidate
       entity
     end
+    # ---- dimensions of whatever the cursor is over ------------------------
+    #
+    # Read-only labels on the object under the cursor, so a size can be checked
+    # without selecting anything and pressing S again.
+    #
+    # Deliberately NOT put into @data_dims. That array is what #on_hover? scans,
+    # and #on_hover? is what makes this tool take the tool stack -- so a hover
+    # label in there would suspend SketchUp's Scale tool, and its grips, every
+    # time the cursor drifted across an object. These labels can be read and
+    # nothing else: no axis lock, no context menu, no click target.
+    #
+    # Note the two senses of "hover" in this file, which are unrelated:
+    # #hovered_dim below is the cursor over a dimension's own text, which IS
+    # interactive. This is the cursor over an object.
+    #
+    # They are drawn EXACTLY like the selected object's dimensions -- same axis
+    # colours, same white label boxes, same witness lines, same grey grip cubes
+    # and dotted centre lines -- and that was not the first attempt. The first
+    # version painted them flat grey, in 2D, with no witness lines, on the
+    # reasoning that a label which cannot be clicked should not look like one that
+    # can. Measured against the reference capture, that reasoning was simply wrong:
+    # the behaviour being asked for shows the hovered object in full, and the
+    # muted version reads as a different, lesser feature.
+    #
+    # Nothing draws a bounding box here either, and that is also measured. With
+    # nothing selected, SketchUp's own Scale tool already outlines the object under
+    # the cursor in blue -- the status bar stays on "Click the item or object you
+    # want to scale" throughout, so no selection is involved. Drawing another box
+    # would only sit on top of a box SketchUp is already drawing.
+    attr_reader(:hover_object, :hover_dims)
+    def update_hover(x, y, view)
+      unless PLUGIN.show_hover_dim?
+        return clear_hover(view)
+      end
+      unless active?
+        return clear_hover(view)
+      end
+      # Mid-drag, and mid-typing into a locked dimension, the user is busy with
+      # the selection; a second set of numbers appearing then is noise.
+      if @tool_state != 0 || @locked_axis
+        return clear_hover(view)
+      end
+      if PLUGIN.navigating?
+        return clear_hover(view)
+      end
+      # Every pixel of movement arrives here. The pick is cheap, measuring is
+      # not -- text_geometry tessellates every glyph -- so nothing is rebuilt
+      # while the cursor stays on the same object.
+      if @hover_mouse == [x, y]
+        return
+      end
+      @hover_mouse = [x, y]
+      entity = hover_pick(x, y, view)
+      if entity && !hover_target?(entity)
+        entity = nil
+      end
+      # == rather than equal?. SketchUp usually hands back the same Ruby object
+      # for the same entity, but nothing promises it, and a fresh wrapper for the
+      # object already being measured would rebuild every label on every mouse
+      # move -- the one cost this guard exists to avoid. Entity#== compares the
+      # entity underneath, and nil == nil covers "empty space, still empty".
+      if entity == @hover_object
+        return
+      end
+      @hover_object = entity
+      @hover_dims = entity && build_hover_dims(view, entity)
+      @hover_camera = entity && store_camera(view)
+      view.invalidate
+      nil
+    rescue StandardError => e
+      p(e)
+      @hover_object = nil
+      @hover_dims = nil
+      nil
+    end
+    # What the hover labels may measure, which is deliberately MORE than what a
+    # click may retarget to.
+    #
+    # #pick_object answers a different question -- what can be scaled as a unit --
+    # and it must keep refusing loose geometry, because clicking a face and having
+    # it become the scale target is not what the click is for. Measuring one is
+    # harmless, and a model where the parts are drawn as loose faces rather than
+    # groups is exactly where reading a size off the cursor is most wanted. So a
+    # Face is accepted here and nowhere else.
+    #
+    # The face only, not the panel it belongs to: #all_connected would give the
+    # third dimension too, but on geometry welded to its neighbours it would report
+    # the size of everything it is welded to, which is worse than a missing number.
+    # A flat face therefore gets two dimensions -- there is no third to give.
+    def hover_pick(x, y, view)
+      entity = pick_object(x, y, view)
+      if entity
+        return entity
+      end
+      # #pick_object has already run the pick, so this reads the same result.
+      raw = view.pick_helper.best_picked
+      unless raw.is_a?(Sketchup::Face)
+        return nil
+      end
+      if raw.respond_to?(:locked?) && raw.locked?
+        return nil
+      end
+      raw
+    rescue StandardError => e
+      p(e)
+      nil
+    end
+    def hover_target?(entity)
+      # The wrapper group the multi-object lock puts around the selection is not
+      # an object the user chose -- labelling it would put numbers on a scratch
+      # group that is about to be exploded again.
+      if GroupLock.temp?(entity)
+        return false
+      end
+      # What is already selected has its own dimensions drawn, in colour and
+      # clickable. Two labels on one edge would only fight.
+      !Sketchup.active_model.selection.to_a.include?(entity)
+    end
+    # No :color and no :extensions override: the defaults are the per-axis colours
+    # and the witness lines, which is the whole point -- one drawing path, so the
+    # hovered object cannot come out looking like a different feature than the
+    # selected one.
+    def build_hover_dims(view, entity)
+      bb_data = compute_bounds_for([entity])
+      points = bb_data[:points]
+      unless points && !points.empty?
+        return nil
+      end
+      dims = compute_dimensions_lines(view, bb_data)
+      unless dims && !dims.empty?
+        return nil
+      end
+      @hover_bb_data = bb_data
+      build_dim_data(view, dims, bb_data)
+    end
+    # Called from #draw, because a camera move changes where the labels belong
+    # without any mouse event arriving to say so.
+    def refresh_hover(view)
+      unless @hover_object
+        return
+      end
+      if PLUGIN.navigating?
+        # Cleared rather than re-measured on every frame of the gesture: the pick
+        # is stale the moment the camera starts moving, and Overlay#navigation_finished
+        # replays the cursor position as soon as the button comes up, which puts
+        # the labels back where they belong.
+        return clear_hover(view)
+      end
+      unless @hover_object.valid?
+        return clear_hover(view)
+      end
+      cam = store_camera(view)
+      if @hover_camera == cam
+        return
+      end
+      @hover_camera = cam
+      @hover_dims = build_hover_dims(view, @hover_object)
+    end
+    # @hover_mouse is cleared too, and that is the point: it is the "same object,
+    # nothing to do" guard, and leaving it set would keep the labels away until
+    # the cursor happened to move again.
+    def clear_hover(view = nil)
+      @hover_mouse = nil
+      unless @hover_object || @hover_dims
+        return false
+      end
+      @hover_object = nil
+      @hover_dims = nil
+      @hover_bb_data = nil
+      @hover_camera = nil
+      view ||= @view
+      if view
+        view.invalidate
+      end
+      true
+    end
+    def draw_hover_dims(view)
+      dims = @hover_dims
+      unless dims && !dims.empty?
+        return
+      end
+      dims.each do |dim|
+        unless dim
+          next
+        end
+        # editable false: no in-place editor, no hover outline on the label. Every
+        # other pixel is drawn by the same code as the selection's dimensions.
+        draw_dimension(view, dim, false)
+      end
+    end
+    # The grey grip cubes and dotted centre lines on the hovered object, the same
+    # ones the selection gets. Never filled green: the fill is this plugin standing
+    # in for a real grip that has stopped being drawn, and the hovered object has no
+    # real grips to stand in for -- SketchUp draws its own on the object it is
+    # pre-highlighting.
+    def draw_hover_grips(view)
+      bb_data = @hover_bb_data
+      unless bb_data && bb_data[:bounds]
+        return
+      end
+      lines = mask_lines(bounds_center_lines(bb_data[:bounds], bb_data[:tr]), @hover_object)
+      # A flat box -- a hovered face -- has a zero-length centre line on the axis it
+      # has no thickness in. Drawing it stacks two grip cubes in the same place and
+      # adds a dotted line of no length. Filtered here rather than in
+      # #draw_grip_boxes: the selection path has drawn those since long before this,
+      # and changing what it draws is a separate decision from what hover draws.
+      lines = lines.reject do |line|
+  !line[0].vector_to(line[1]).valid?
+end
+      draw_grip_boxes(view, lines, bb_data[:center], false)
+    end
     def hovered_dim
       unless @data_dims
         return
@@ -281,6 +503,11 @@ end
       unless active?
         return
       end
+      # Also called from Overlay#dispatch_mouse, which is the path that runs while
+      # SketchUp's own Scale tool is active and this one is off the stack. Both
+      # call it because neither covers both cases, and #update_hover returns at
+      # once when the cursor has not moved, so calling twice costs nothing.
+      update_hover(x, y, view)
       if @tool_state == 0 && @data_dims
         @data_dims.each do |dim|
           unless dim
@@ -571,6 +798,29 @@ end
     end
     def onLButtonUp(flags, x, y, view)
     end
+    # The plain arrow, id 0.
+    #
+    # If it ever comes out as some other shape, this is the single number to change:
+    # the ids belong to SketchUp and are not exposed as named constants.
+    PLAIN_CURSOR = 0
+    # The Scale tool's cursor -- an arrow with a little box and a red grip corner --
+    # is SketchUp's own, and while the native tool has the mouse there is nothing to
+    # be done about it from Ruby. But whenever THIS tool holds the stack, SketchUp
+    # asks it what the cursor should be, and a tool that does not answer leaves
+    # whatever was set last: the Scale cursor.
+    #
+    # Where this applies is exactly where that cursor is misleading. Outside the
+    # padded grip box there is no grip to drag -- a click retargets to another
+    # object -- and over a dimension label a click edits a number. Inside the grip
+    # box the native tool is in charge again and its cursor comes back, which is the
+    # one place it is telling the truth.
+    def onSetCursor
+      UI.set_cursor(PLAIN_CURSOR)
+      true
+    rescue StandardError => e
+      p(e)
+      false
+    end
     def getExtents
       bb = Sketchup.active_model.bounds
       bb
@@ -616,9 +866,20 @@ end
     def compute_selected_bounds
       @model = Sketchup.active_model
       @selection = @model.selection
-      entities = @selection.reject do |e|
+      compute_bounds_for(@selection.reject do |e|
   e.respond_to?(:locked?) && e.locked?
-end
+end)
+    end
+    # Everything derived from a bounding box -- corners, edges, centre lines, the
+    # handle set the mask allows -- for ANY list of entities rather than for the
+    # selection specifically.
+    #
+    # Split out so the object under the cursor is measured by exactly the code
+    # that measures the selected one. A second implementation for hover labels
+    # could disagree with the real thing, and a number that changes when you
+    # click is worse than no number.
+    def compute_bounds_for(entities)
+      entities = entities.to_a
       h = {}
       if entities.empty?
         return h
@@ -674,58 +935,78 @@ end + h[:centers]
       h[:scale_points] = scale_points
       h
     end
-    def get_dim_line(vec, lines)
+    def get_dim_line(vec, lines, bb_data = @bb_data)
       plines = lines.find_all do |l|
   l[0].vector_to(l[1]).valid? && l[0].vector_to(l[1]).parallel?(vec)
 end
-      sort_line = bounds_center_lines(@bb, @tr_bb)[2]
+      sort_line = bounds_center_lines(bb_data[:bounds], bb_data[:tr])[2]
       plines = sort_lines_by_line(plines, sort_line.reverse)
       plines.first
     end
-    def compute_dimensions_lines(view = Sketchup.active_model.active_view)
-      direction = @view.camera.direction
-      unless @bb_points
+    # bb_data rather than the ivars, so a second box can be measured without
+    # swapping @bb/@bb_points out from under #draw -- which runs on the same
+    # ivars every frame, and would draw the wrong box for as long as the swap
+    # lasted. The camera is read off the view passed in for the same reason.
+    def compute_dimensions_lines(view = Sketchup.active_model.active_view, bb_data = @bb_data)
+      direction = view.camera.direction
+      points = bb_data && bb_data[:points]
+      unless points && !points.empty?
         return
       end
+      center = bb_data[:center]
       dims = []
-      lines = @bb_lines.clone
+      lines = bb_data[:lines].clone
       lines.sort_by! do |l|
         midpoint(l).distance(view.camera.eye)
       end
-      vecx = @bb_points[0].vector_to(@bb_points[1])
-      vecy = @bb_points[1].vector_to(@bb_points[3])
-      vecz = @bb_points[0].vector_to(@bb_points[4])
+      vecx = points[0].vector_to(points[1])
+      vecy = points[1].vector_to(points[3])
+      vecz = points[0].vector_to(points[4])
       if vecx.valid?
-        line = get_dim_line(vecx, lines)
+        line = get_dim_line(vecx, lines, bb_data)
         vec_offset = vecy.valid? ? vecy.reverse : vecz.cross(vecx)
         if vec_offset.angle_between(direction).radians < 90
           vec_offset.reverse!
         end
         if vec_offset.parallel?(direction)
-          vec_offset = @view.camera.up
+          vec_offset = view.camera.up
         end
         dims << [line, vec_offset]
       else
       end
       if vecy.valid?
-        line = get_dim_line(vecy, lines)
+        line = get_dim_line(vecy, lines, bb_data)
         vec_offset = vecx.valid? ? vecx : vecz.cross(vecy)
         if vec_offset.angle_between(direction).radians < 90
           vec_offset.reverse!
         end
         if vec_offset.parallel?(direction)
-          vec_offset = @view.camera.up
+          vec_offset = view.camera.up
         end
         dims << [line, vec_offset]
       else
       end
-      if vecz.valid? && !direction.parallel?(Z_AXIS)
-        line = [@bb_points[0], @bb_points[4]]
+      # parallel?(vecz), not parallel?(Z_AXIS). The whole branch offsets the label by
+      # vecz.cross(direction), which collapses to a zero-length vector exactly when
+      # the camera looks ALONG the box's third edge -- and the box's third edge is
+      # the world Z axis only while the object is unrotated. Testing the world axis
+      # got both cases wrong:
+      #
+      #   - a component rotated so its third edge lies horizontal lost that label in
+      #     plan view, though there was nothing wrong with drawing it. A whole
+      #     dimension simply absent, and with it any way to retype that size.
+      #   - looking down that rotated edge sailed past the guard and built the label
+      #     off a zero vector.
+      #
+      # The x and y branches have carried the equivalent test all along -- they fall
+      # back to camera.up when their offset comes out parallel to the view.
+      if vecz.valid? && !direction.parallel?(vecz)
+        line = [points[0], points[4]]
         ls = lines.find_all do |l|
   l[0].vector_to(l[1]).valid? && l[0].vector_to(l[1]).parallel?(vecz)
 end
         vec = vecz.cross(direction)
-        ls = sort_lines_by_line(ls, [@bb_center, vec])
+        ls = sort_lines_by_line(ls, [center, vec])
         line = ls.first
         vec_offset = vecz.cross(direction)
         dims << [line, vec_offset]
@@ -738,12 +1019,23 @@ end
         return
       end
       @offset = view.pixels_to_model(20, @bb_center)
-      point = @dims.map(&:first).flatten.find do |pt|
+      @data_dims = build_dim_data(view, @dims, @bb_data)
+    end
+    # Text, boxes and witness lines for one set of dimension lines.
+    #
+    # opts[:color] paints them all one colour instead of the per-axis
+    # red/green/blue, and opts[:extensions] can drop the witness lines. Both are
+    # there for the hover labels: they have to read as something being shown,
+    # not as the three numbers the user can click and retype.
+    def build_dim_data(view, dims, bb_data, opts = {})
+      center = bb_data[:center]
+      point = dims.map(&:first).flatten.find do |pt|
   point_inside_screen?(view, pt)
 end
-      point ||= @bb_center
+      point ||= center
       dim_offset = view.pixels_to_model(20, point)
-      @data_dims = @dims.map do |ar|
+      extensions = opts.key?(:extensions) ? opts[:extensions] : true
+      data = dims.map do |ar|
   unless ar
     next
   end
@@ -754,27 +1046,29 @@ end
   unless vector_offset.valid?
     next
   end
-  parse_dimemsion_geometry(view, line, vector_offset, true, dim_offset)
+  parse_dimemsion_geometry(view, line, vector_offset, extensions, dim_offset, bb_data)
 end
-      @data_dims.each_with_index do |d, i|
+      data.each do |d|
         unless d
           next
         end
-        l = d[:line]
-        vec = l[0].vector_to(l[1])
-        if vec.parallel?(@tr_bb.xaxis)
-          color = "red"
-        elsif vec.parallel?(@tr_bb.yaxis)
-          color = "darkgreen"
-        elsif vec.parallel?(@tr_bb.zaxis)
-          color = "blue"
-        else
-          color = "black"
-        end
-        d[:color] = color
+        d[:color] = opts[:color] || axis_color(d[:line], bb_data[:tr])
+      end
+      data
+    end
+    def axis_color(line, tr)
+      vec = line[0].vector_to(line[1])
+      if vec.parallel?(tr.xaxis)
+        "red"
+      elsif vec.parallel?(tr.yaxis)
+        "darkgreen"
+      elsif vec.parallel?(tr.zaxis)
+        "blue"
+      else
+        "black"
       end
     end
-    def parse_dimemsion_geometry(view, line, vector_offset, extension_line = true, dim_offset = 50.mm)
+    def parse_dimemsion_geometry(view, line, vector_offset, extension_line = true, dim_offset = 50.mm, bb_data = @bb_data)
       if extension_line
         sp, ep = line
         dim = line.map do |pt|
@@ -789,7 +1083,7 @@ end
       point = midpoint(dim)
       point.offset!(vector_offset, dim_offset / 4)
       vector = dim.first.vector_to(dim.last)
-      if vector.parallel?(@tr_bb.zaxis)
+      if vector.parallel?(bb_data[:tr].zaxis)
         vector.reverse!
       end
       normal = vector.cross(vector_offset).reverse
@@ -922,6 +1216,14 @@ end
         unless active?
           return
         end
+        # Above the @dims guard on purpose. @dims is the SELECTION's dimensions,
+        # and it is empty whenever nothing is selected -- which is exactly when
+        # hovering to read a size is most useful: press S, then point at things.
+        if PLUGIN.show_hover_dim?
+          refresh_hover(view)
+          draw_hover_dims(view)
+          draw_hover_grips(view)
+        end
         unless @dims && !@dims.empty?
           return
         end
@@ -964,7 +1266,16 @@ end
     def draw_bounds?
       active_itself? || PLUGIN.navigating?
     end
+    # @bb can be nil while @dims is not, so the guard in #draw is not enough.
+    # #deactivate nils the bounds -- store_bounds_points with an empty selection --
+    # and does NOT recompute @dims, so a frame can arrive with stale dimension
+    # lines and no box at all. bound_points then asks a nil box for its #width and
+    # every frame ends in a rescued NoMethodError: nothing below the raise is drawn
+    # and the Ruby Console fills up at frame rate.
     def draw_selected_bounds(view)
+      unless @bb
+        return
+      end
       @bb_lines = bounds_lines(@bb, @tr_bb)
       view.line_stipple = ""
       view.drawing_color = "yellow"
@@ -980,27 +1291,57 @@ end
     # real ones. Pure green, read off SketchUp's own grips.
     GRIP_FILL = [0, 255, 0].freeze
     def draw_scale_points(view)
-      lines = bounds_center_lines(@bb, @tr_bb)
-      entity = view.model.selection[0]
+      # Same stale-@dims-with-no-box case as #draw_selected_bounds above.
+      unless @bb
+        return
+      end
+      # Only while standing in for grips SketchUp has stopped drawing. When the
+      # native Scale tool is drawing its own, these add nothing -- and on some
+      # selections they add something worse.
+      #
+      # #bounds_center_lines produces the six face-centre positions. SketchUp does
+      # not always offer that set: on a flat selection it collapses the pair on the
+      # thin axis and drops the rest, so four grey outlines were left standing where
+      # there is no grip at all, with one green grip in the middle. They read as
+      # grips that had been switched off -- which is exactly what choosing XYZ on a
+      # flat panel was reported as doing.
+      #
+      # Nothing is lost by staying quiet: SketchUp is drawing the real ones, and the
+      # real ones are always right about which grips exist. The substitutes below are
+      # for the case where there are none to be right about.
+      unless active_itself? || PLUGIN.navigating?
+        return
+      end
       # The axis lock applies whether or not this tool holds the stack. It used
       # to be skipped while it did, so taking the stack put back the two axes
       # the lock had just taken away.
-      if view.model.selection.length == 1 && entity.respond_to?(:definition)
-        no_scale_mask = entity.definition.behavior.no_scale_mask?
-        x = 126
-        y = 125
-        z = 123
-        case no_scale_mask
-        when x
-          lines = [lines[0]]
-        when y
-          lines = [lines[1]]
-        when z
-          lines = [lines[2]]
-        end
+      entity = view.model.selection.length == 1 ? view.model.selection[0] : nil
+      lines = mask_lines(bounds_center_lines(@bb, @tr_bb), entity)
+      draw_grip_boxes(view, lines, @bb_center, true)
+    end
+    # Which of the three centre lines survive the object's own no_scale_mask. Split
+    # out so the hovered object is filtered by ITS mask rather than the selection's.
+    def mask_lines(lines, entity)
+      unless entity && entity.respond_to?(:definition)
+        return lines
       end
+      x = 126
+      y = 125
+      z = 123
+      case entity.definition.behavior.no_scale_mask?
+      when x
+        [lines[0]]
+      when y
+        [lines[1]]
+      when z
+        [lines[2]]
+      else
+        lines
+      end
+    end
+    def draw_grip_boxes(view, lines, center, fill)
       box_lines = {}
-      d = view.pixels_to_model(8, @bb_center)
+      d = view.pixels_to_model(8, center)
       view.line_width = 1
       lines.each do |line|
         line.each do |point|
@@ -1037,7 +1378,9 @@ end
       # SketchUp shows too, so the copy is faithful. With no lock the real tool
       # shows all 27 and the other 21 are simply absent for the duration -- the
       # same partial copy this already drew whenever it held the stack.
-      fill = active_itself? || PLUGIN.navigating?
+      #
+      # `fill` is decided by the caller now: the selection's grips fill when there
+      # is no real grip underneath, the hovered object's never do.
       box_lines.each do |line, box2ds|
         view.line_stipple = ""
         box2ds.each do |box2d|
@@ -1067,66 +1410,76 @@ end)
         unless dim
           next
         end
-        # A locked dimension doubles as the text field. Before the first
-        # keystroke the number is drawn selected; after it, the box carries what
-        # is being typed instead -- the same replace-the-selection behaviour a
-        # text field has. @edit_echo going false means the keyboard could not be
-        # mirrored safely, so it falls back to a plain unselected label.
-        locked = @locked_axis && dim_axis(dim) == @locked_axis
-        selected = locked && @edit_echo && @edit_buffer.nil?
-        typed = locked && @edit_echo && @edit_buffer && !@edit_buffer.empty?
-        box = typed && text_geometry(view, @edit_buffer, dim[:options]) || dim
-        text_color = selected ? EDIT_TEXT : dim[:color]
-        view.drawing_color = selected ? EDIT_FILL : [255, 255, 255, 150]
-        view.draw2d(GL_POLYGON, box[:bb_text_2d])
-        lines = []
-        if dim[:extensions] && !dim[:extensions].empty?
-          lines = lines + dim[:extensions]
-        end
-        if dim[:line] && !dim[:line].empty?
-          lines << dim[:line]
-        end
-        view.line_stipple = ""
-        view.line_width = 1
-        if active_itself?
-          view.drawing_color = dim[:color]
-          drawVec2D(dim[:line].map do |pt|
+        draw_dimension(view, dim, true)
+      end
+    end
+    # One dimension: label box, witness lines, text, and the editor decorations.
+    #
+    # `editable` is false for the hovered object's labels, and it switches off
+    # exactly three things -- the in-place editor, the caret, and the outline that
+    # marks a label as under the cursor or locked. Everything else is shared on
+    # purpose: it is the same drawing, so the two sets cannot drift apart into
+    # looking like different features.
+    def draw_dimension(view, dim, editable)
+      # A locked dimension doubles as the text field. Before the first
+      # keystroke the number is drawn selected; after it, the box carries what
+      # is being typed instead -- the same replace-the-selection behaviour a
+      # text field has. @edit_echo going false means the keyboard could not be
+      # mirrored safely, so it falls back to a plain unselected label.
+      locked = editable && @locked_axis && dim_axis(dim) == @locked_axis
+      selected = locked && @edit_echo && @edit_buffer.nil?
+      typed = locked && @edit_echo && @edit_buffer && !@edit_buffer.empty?
+      box = typed && text_geometry(view, @edit_buffer, dim[:options]) || dim
+      text_color = selected ? EDIT_TEXT : dim[:color]
+      view.drawing_color = selected ? EDIT_FILL : [255, 255, 255, 150]
+      view.draw2d(GL_POLYGON, box[:bb_text_2d])
+      lines = []
+      if dim[:extensions] && !dim[:extensions].empty?
+        lines = lines + dim[:extensions]
+      end
+      if dim[:line] && !dim[:line].empty?
+        lines << dim[:line]
+      end
+      view.line_stipple = ""
+      view.line_width = 1
+      if active_itself?
+        view.drawing_color = dim[:color]
+        drawVec2D(dim[:line].map do |pt|
   view.screen_coords(pt)
 end, view, 5)
-        else
-          view.draw_points(dim[:line], 10, 3, dim[:color])
-        end
-        view.line_width = 1
-        view.drawing_color = dim[:color]
-        view.draw(GL_LINES, lines.flatten)
-        view.line_stipple = "_"
-        view.draw2d(GL_LINES, lines.flatten.map do |pt|
-  view.screen_coords(pt)
-end)
-        view.drawing_color = text_color
-        # An emptied buffer must draw an empty field, not the old number: the
-        # box stays put but nothing is written in it.
-        triangles = @edit_buffer == "" && locked && @edit_echo ? [] : box[:text_triangles]
-        view.draw2d(GL_TRIANGLES, triangles.flatten.map do |pt|
-  view.screen_coords(pt)
-end)
-        view.draw(GL_TRIANGLES, triangles.flatten)
-        if locked && @edit_echo && @edit_buffer
-          draw_caret(view, box[:bb_text_2d])
-        end
-        # The outline marks both the dimension under the cursor and the one
-        # locked for VCB entry. Same weight for both: the locked dimension used
-        # to be stroked at 4, and on a box only as wide as "870" that border
-        # nearly closed over the text and read as a filled badge.
-        unless dim[:hover] || locked
-          next
-        end
-        view.drawing_color = dim[:color]
-        view.line_stipple = ""
-        view.line_width = 2
-        view.draw(GL_LINE_LOOP, box[:bb_text])
-        view.draw2d(GL_LINE_LOOP, box[:bb_text_2d])
+      else
+        view.draw_points(dim[:line], 10, 3, dim[:color])
       end
+      view.line_width = 1
+      view.drawing_color = dim[:color]
+      view.draw(GL_LINES, lines.flatten)
+      view.line_stipple = "_"
+      view.draw2d(GL_LINES, lines.flatten.map do |pt|
+  view.screen_coords(pt)
+end)
+      view.drawing_color = text_color
+      # An emptied buffer must draw an empty field, not the old number: the
+      # box stays put but nothing is written in it.
+      triangles = @edit_buffer == "" && locked && @edit_echo ? [] : box[:text_triangles]
+      view.draw2d(GL_TRIANGLES, triangles.flatten.map do |pt|
+  view.screen_coords(pt)
+end)
+      view.draw(GL_TRIANGLES, triangles.flatten)
+      if locked && @edit_echo && @edit_buffer
+        draw_caret(view, box[:bb_text_2d])
+      end
+      # The outline marks both the dimension under the cursor and the one
+      # locked for VCB entry. Same weight for both: the locked dimension used
+      # to be stroked at 4, and on a box only as wide as "870" that border
+      # nearly closed over the text and read as a filled badge.
+      unless dim[:hover] || locked
+        return
+      end
+      view.drawing_color = dim[:color]
+      view.line_stipple = ""
+      view.line_width = 2
+      view.draw(GL_LINE_LOOP, box[:bb_text])
+      view.draw2d(GL_LINE_LOOP, box[:bb_text_2d])
     end
     # A caret at the right edge of the field, so an empty box still reads as
     # "waiting for input" rather than as a dimension that lost its label. Drawn

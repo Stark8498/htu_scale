@@ -403,12 +403,18 @@ check "holding the stack still fills, as it did before" do
   filled(grip_draw("ScaleTool", true)).positive?
 end
 
-# The change is additive: nothing that was drawn before stopped being drawn.
-check "the gray outline is drawn whatever the gesture" do
-  [["CameraOrbitTool", false], ["CameraPanTool", false],
-   ["ScaleTool", false], ["ScaleTool", true]].all? do |name, stack|
-    outlined(grip_draw(name, stack)).positive?
-  end
+# The grey outline follows the same rule as the fill: both appear exactly when
+# SketchUp is not drawing the real grips, and neither appears when it is.
+#
+# The outline used to be drawn always, on the theory that it would sit on top of a
+# real green grip and let the green show through. On a flat selection SketchUp offers
+# a different set of grips than #bounds_center_lines produces, so outlines were left
+# standing where there was no grip -- reported as "choosing XYZ makes the axis grips
+# go inactive". See retarget_test.
+check "the outline appears exactly where the real grips are missing" do
+  substituting = [["CameraOrbitTool", false], ["CameraPanTool", false], ["ScaleTool", true]]
+  substituting.all? { |name, stack| outlined(grip_draw(name, stack)).positive? } &&
+    outlined(grip_draw("ScaleTool", false)).zero?
 end
 
 # The lock is what makes the copy faithful: it takes the corner and edge grips
@@ -588,6 +594,56 @@ check "each release asks again" do
     spy.replays == 3
   end
 end
+
+puts "\n--- the cursor, on frames the native tool owns ---"
+
+# ScalePPTool#onSetCursor only gets asked while this tool is on top of the stack, so
+# the Scale tool's arrow-with-a-grip-box came straight back wherever the native tool
+# had the mouse. The way past that is the mechanism the whole plugin rests on: an
+# overlay is handed mouse moves whichever tool is active, and UI.set_cursor is a
+# plain global call rather than something only a callback may make.
+def cursor_overlay(tool_name)
+  overlay = PLUG::ScalePP2Overlay.new
+  overlay.enabled = true
+  overlay.dim_scale.instance_variable_set(:@active, true)
+  MODEL.tools.stack.clear
+  MODEL.tools.active_tool_name = tool_name
+  $SU_CALLS[:set_cursor].clear
+  overlay
+end
+
+check "a move relayed by the overlay overwrites the Scale cursor" do
+  cursor_overlay("ScaleTool").onMouseMove(0, 500, 400, MODEL.active_view)
+  $SU_CALLS[:set_cursor] == [TOOL::PLAIN_CURSOR]
+end
+
+# The dedupe in #onMouseMove exists to skip work when the pointer has not moved --
+# but the native tool may still have repainted its cursor, so this one call has to
+# happen ahead of it.
+check "and does so even on a move the overlay otherwise skips" do
+  overlay = cursor_overlay("ScaleTool")
+  overlay.onMouseMove(0, 500, 400, MODEL.active_view)
+  $SU_CALLS[:set_cursor].clear
+  overlay.onMouseMove(0, 500, 400, MODEL.active_view)
+  $SU_CALLS[:set_cursor] == [TOOL::PLAIN_CURSOR]
+end
+
+# Orbit and pan have cursors of their own that mean something, and they are not this
+# plugin's to take.
+check "but not while the camera is being dragged" do
+  cursor_overlay("CameraOrbitTool").onMouseMove(0, 501, 401, MODEL.active_view)
+  $SU_CALLS[:set_cursor].empty?
+end
+
+# Nor is the Select, Move or Rotate cursor this plugin's business.
+check "nor when the Scale tool is not the one running" do
+  overlay = cursor_overlay("SelectionTool")
+  overlay.dim_scale.instance_variable_set(:@active, false)
+  overlay.onMouseMove(0, 502, 402, MODEL.active_view)
+  $SU_CALLS[:set_cursor].empty?
+end
+
+MODEL.tools.active_tool_name = nil
 
 puts "\n--- result ---"
 if $fails.zero?

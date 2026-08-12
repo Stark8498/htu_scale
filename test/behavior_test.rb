@@ -92,12 +92,116 @@ check "and with several things selected" do
   PLUG.behavior_state == XYZ && mask_of(a) == XYZ && mask_of(b) == XYZ
 end
 
+puts "\n--- making the new mask actually show up ---"
+
+# The bug this section exists for: the first press of a behaviour button did nothing
+# visible, and pressing a second button and coming back looked like the fix.
+#
+# SketchUp's Scale tool does not re-read no_scale_mask while it stays the active
+# tool, and send_action("selectScaleTool:") on the tool already running is a no-op --
+# so the mask was written and never looked at. The second press only appeared to work
+# because it landed while another tool held the stack, which made the re-pick a real
+# tool change. Out through Select and back is a real change every time.
+check "a button press leaves the Scale tool and comes back, not just send_action" do
+  self.stored = ALL
+  select(component(ALL))
+  $SU_CALLS[:select_tool].clear
+  $SU_CALLS[:send_action].clear
+  PLUG.set_behavior(XYZ)
+  $SU_CALLS[:select_tool].include?(nil) &&
+    $SU_CALLS[:send_action].include?("selectScaleTool:")
+end
+
+check "and the mask is on the component before the tool is asked to look" do
+  self.stored = ALL
+  group = component(ALL)
+  select(group)
+  order = []
+  # Held and put back, not removed: `def self.repick_scale_tool` lives on the same
+  # singleton class, so remove_method would delete the real one and every check after
+  # this would fail on a method that no longer exists.
+  original = PLUG.method(:repick_scale_tool)
+  PLUG.define_singleton_method(:repick_scale_tool) do
+    order << [:repick, mask_of(group)]
+    true
+  end
+  PLUG.set_behavior(XYZ)
+  PLUG.define_singleton_method(:repick_scale_tool, original)
+  order == [[:repick, XYZ]]
+end
+
+# The trip through Select is a tool change as far as the observer can tell, and
+# GroupLock unwraps on a tool change. Unwrapping here would explode the wrapper the
+# user is still scaling -- and cost two undo steps for one button press.
+#
+# Driven through GroupLock.tool_changed by hand rather than through set_behavior: the
+# shim's #select_tool does not call the observers, so a check written the obvious way
+# never reaches the guard at all. Mutation test caught that -- removing the guard left
+# every check green.
+def wrapped_pair
+  a = component(ALL)
+  b = component(ALL)
+  MODEL.entities.add_entity(a)
+  MODEL.entities.add_entity(b)
+  select(a, b)
+  PLUG::GroupLock.wrap(MODEL)
+end
+
+check "a marked round trip does not explode a live wrapper" do
+  self.stored = XYZ
+  wrapper = wrapped_pair
+  $SU_CALLS[:explode].clear
+  at = $SU_TIMERS.size
+  PLUG::GroupLock.suspend { PLUG::GroupLock.tool_changed("SelectionTool") }
+  $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
+  ok = $SU_CALLS[:explode].empty? && PLUG::GroupLock.temp_group.equal?(wrapper)
+  PLUG::GroupLock.unwrap(MODEL)
+  ok
+end
+
+# And the marking is done by the one method that makes the round trip, so the two
+# halves cannot drift apart.
+check "and repick_scale_tool is what marks it" do
+  seen = nil
+  original = MODEL.method(:select_tool)
+  MODEL.define_singleton_method(:select_tool) do |tool|
+    seen = PLUG::GroupLock.suspended?
+    original.call(tool)
+  end
+  PLUG.repick_scale_tool
+  MODEL.define_singleton_method(:select_tool, original)
+  seen == true
+end
+
+# The mark must not outlive the trip, or the next real departure keeps the wrapper.
+check "and the mark is gone once the trip is over" do
+  PLUG.repick_scale_tool
+  !PLUG::GroupLock.suspended?
+end
+
+# Only the leaving half is excused. A real departure still has to unwrap, or a
+# scratch group is left in the user's model.
+check "but a real tool change still unwraps" do
+  self.stored = XYZ
+  a = component(ALL)
+  b = component(ALL)
+  MODEL.entities.add_entity(a)
+  MODEL.entities.add_entity(b)
+  select(a, b)
+  PLUG::GroupLock.wrap(MODEL)
+  at = $SU_TIMERS.size
+  PLUG::GroupLock.tool_changed("SelectionTool")
+  $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
+  PLUG::GroupLock.temp_group.nil?
+end
+
 puts "\n--- the buttons themselves ---"
 
-# cmds also carries the show-dimensions toggle, which has nothing to do with
-# scale handles and is checked on its own rule.
+# cmds also carries the two dimension toggles, which have nothing to do with
+# scale handles and are checked on their own rules.
 def scale_cmds
-  PLUG.cmds.reject { |cmd, _| cmd.equal?(PLUG.cmd_dim) }
+  toggles = [PLUG.cmd_dim, PLUG.cmd_hover_dim]
+  PLUG.cmds.reject { |cmd, _| toggles.any? { |t| cmd.equal?(t) } }
 end
 
 # They used to gray out unless exactly one component was selected, which was the

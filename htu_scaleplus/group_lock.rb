@@ -32,10 +32,31 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       @temp_group
     end
 
+    # A deliberate round trip out of the Scale tool and straight back
+    # (PLUGIN.repick_scale_tool, which is how a mask change is made visible) looks
+    # exactly like the user leaving the tool. Unwrapping there would explode the
+    # wrapper still under the cursor and cost two undo steps for one button press,
+    # so the caller can mark its own trip. A real departure is unaffected.
+    def suspend
+      @suspended = true
+      yield
+    ensure
+      @suspended = false
+    end
+
+    def suspended?
+      @suspended ? true : false
+    end
+
     # Deferred by a tick for the same reason ScalePP2Observer#apply_behavior is:
     # this edits the model, and an edit made from inside an observer callback can
     # land in the middle of whatever operation caused the callback.
     def tool_changed(tool_name)
+      # Only the leaving half is suspended. The Scale tool coming back still wraps,
+      # and #wrappable? refuses a second wrapper while one is live, so the round trip
+      # leaves exactly what it found.
+      return if suspended? && tool_name != "ScaleTool"
+
       model = Sketchup.active_model
       return unless model
 
@@ -81,12 +102,13 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       return nil unless group
 
       @temp_group = group
-      # The Scale tool read its handles off the old selection and does not
-      # reliably notice this one. Re-picking the tool is how main.rb#set_behavior
-      # already forces that reread. It fires onActiveToolChanged again, which
-      # comes back here -- the #temp_group guard in #wrappable? is what stops
-      # that from wrapping a second time.
-      Sketchup.send_action("selectScaleTool:")
+      # The Scale tool read its handles off the old selection and does not reliably
+      # notice this one. PLUGIN.repick_scale_tool is the one way in this plugin that
+      # reliably makes it look again -- a bare send_action is a no-op while the Scale
+      # tool is already the active tool, which is exactly the bug the behaviour
+      # buttons had. It fires onActiveToolChanged again, which comes back here, and
+      # the #temp_group guard in #wrappable? is what stops a second wrapper.
+      PLUGIN.repick_scale_tool
       group
     end
 

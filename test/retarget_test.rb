@@ -119,6 +119,19 @@ check "but it does pop once the cursor is back on the grips" do
   $SU_CALLS[:pop_tool].size > before
 end
 
+puts "\n--- the cursor while it holds the stack ---"
+
+# SketchUp asks the tool on top of the stack what the cursor should be, and a tool
+# that does not answer leaves whatever was set last -- here, the Scale tool's
+# arrow-with-a-grip-box. That box says "drag a grip", which is untrue everywhere
+# this tool holds the stack: outside the padded box a click retargets, and over a
+# label it edits a number.
+check "it answers, rather than leaving the Scale cursor standing" do
+  $SU_CALLS[:set_cursor].clear
+  answered = tool_with_bounds(BOX).onSetCursor
+  answered && $SU_CALLS[:set_cursor] == [TOOL::PLAIN_CURSOR]
+end
+
 puts "\n--- the click itself ---"
 a = Sketchup::Group.new
 b = Sketchup::Group.new
@@ -189,10 +202,15 @@ end
 
 puts "\n--- the grips must not read as switched off ---"
 
-# The gray outlines this tool draws sit right on top of SketchUp's own green
-# grips. That is fine while the Scale tool is drawing them underneath -- and the
-# moment this tool takes the stack, it is not, so the outlines stand on nothing
-# and the grips read as disabled for as long as the cursor is away.
+# The moment this tool takes the stack, SketchUp stops drawing the Scale tool's
+# green grips, and without a substitute they read as disabled for as long as the
+# cursor is away. So this tool draws its own -- but ONLY then.
+#
+# It used to draw grey outlines in both states, on the theory that they would sit on
+# top of SketchUp's green ones and let the green show through the middle. On a flat
+# selection that is untrue: SketchUp offers a different set of grips than
+# #bounds_center_lines produces, so four outlines were left standing where there was
+# no grip at all. Reported as "choosing XYZ makes the axis grips go inactive".
 def grip_tool
   t = tool_with_bounds(BOX)
   t.instance_variable_set(:@bb, Geom::BoundingBox.new)
@@ -218,32 +236,36 @@ def component_locked_to(mask)
   group
 end
 
-check "with the Scale tool drawing underneath, they are outlined only" do
+# The rule, and the whole of it: SketchUp is drawing the real grips, and the real
+# ones are always right about which grips exist. Nothing this tool draws can improve
+# on that, and on a flat selection it disagrees.
+check "while the Scale tool draws its own, this tool draws none" do
   selected
-  grips_drawn(false).none? { |mode, _, _| mode == GL_POLYGON }
+  grips_drawn(false).empty?
 end
 
-check "once this tool holds the stack it fills them in itself" do
+check "once this tool holds the stack it draws them, filled in" do
   selected
   filled = grips_drawn(true).select { |mode, _, _| mode == GL_POLYGON }
   !filled.empty? && filled.all? { |_, _, color| color == TOOL::GRIP_FILL }
 end
 
-check "and still outlines them, so a grip keeps its edge" do
+check "and outlines them too, so a grip keeps its edge" do
   selected
   grips_drawn(true).any? { |mode, _, _| mode == GL_LINE_LOOP }
 end
 
-# The lock used to be ignored while this tool held the stack, so moving the
-# cursor away handed back the two axes it had just taken off.
-check "an axis lock leaves one axis, on the stack or off it" do
+# The lock used to be ignored while this tool held the stack, so taking the stack
+# handed back the two axes the lock had just taken off. That is what these two pin,
+# and the mask still has to be obeyed by the substitutes.
+check "an axis lock leaves one axis in the substitutes" do
   selected(component_locked_to(126))
-  [false, true].map { |p| grips_drawn(p).count { |mode, _, _| mode == GL_LINES } } == [1, 1]
+  grips_drawn(true).count { |mode, _, _| mode == GL_LINES } == 1
 end
 
-check "and with no lock all three are offered, either way" do
+check "and with no lock all three are offered" do
   selected(component_locked_to(0))
-  [false, true].map { |p| grips_drawn(p).count { |mode, _, _| mode == GL_LINES } } == [3, 3]
+  grips_drawn(true).count { |mode, _, _| mode == GL_LINES } == 3
 end
 
 puts "\n--- result ---"

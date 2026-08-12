@@ -150,6 +150,173 @@ check "an unreadable VCB entry re-selects instead of dropping the lock" do
   t.locked_axis == "lenx" && t.edit_buffer.nil?
 end
 
+# Everything above is the field in front of the resize. None of it proves a resize
+# happens, and until Geom::Transformation in the shim became a real matrix nothing
+# could: .scaling ignored its arguments and #* returned self, so every size came out
+# the same whatever the plugin did.
+puts "\n--- typing a number actually resizes the object ---"
+
+MODEL = Sketchup.active_model
+
+def box(dx, dy, dz, tr = nil)
+  group = Sketchup::Group.new
+  group.local_bounds.add(Geom::Point3d.new(0, 0, 0), Geom::Point3d.new(dx, dy, dz))
+  group.transformation = tr if tr
+  MODEL.entities.add_entity(group)
+  group
+end
+
+def armed(entity)
+  tool = TOOL.new(nil)
+  # @active directly: the setter runs activate, which recomputes from the real
+  # selection and would throw away the state set up here.
+  tool.instance_variable_set(:@active, true)
+  tool.instance_variable_set(:@tool_state, 0)
+  tool.instance_variable_set(:@model, MODEL)
+  tool.instance_variable_set(:@view, VIEW)
+  MODEL.selection.clear
+  MODEL.selection.add(entity)
+  tool.instance_variable_set(:@selection, MODEL.selection)
+  tool.store_bounds_points
+  tool.compute_dimensions(VIEW, true)
+  tool
+end
+
+# How far the instance transformation stretches each of its own axes -- which is what
+# #set_dim_value changes. Read as axis LENGTHS, not as the matrix diagonal: on a
+# rotated object the diagonal is not the scale (a 90-degree turn puts the z scale at
+# index 9), and a check reading it would be measuring itself rather than the plugin.
+def scales(entity)
+  tr = entity.transformation
+  [tr.xaxis, tr.yaxis, tr.zaxis].map { |v| v.length.round(4) }
+end
+
+# 40 as the VCB reads it, so the expected factor can be stated exactly.
+FORTY = "40".to_l
+
+def resize(entity, axis, text = "40")
+  tool = armed(entity)
+  tool.lock_axis(axis)
+  tool.onUserText(text, VIEW)
+  tool
+end
+
+check "the harness scales at all, or nothing below means anything" do
+  # Guard on the shim: a Transformation that swallowed #* would leave every check in
+  # this section green while the plugin did nothing.
+  tr = Geom::Transformation.scaling(2, 3, 4) * Geom::Transformation.new
+  tr.to_a[0] == 2.0 && tr.to_a[5] == 3.0 && tr.to_a[10] == 4.0
+end
+
+check "the x label resizes x, and leaves y and z alone" do
+  g = box(100, 60, 30)
+  resize(g, "lenx")
+  scales(g) == [(FORTY / 100).round(4), 1.0, 1.0]
+end
+
+check "the y label resizes y" do
+  g = box(100, 60, 30)
+  resize(g, "leny")
+  scales(g) == [1.0, (FORTY / 60).round(4), 1.0]
+end
+
+# The one that was reported: "trục z mà thay đổi dimension không được".
+check "the z label resizes z" do
+  g = box(100, 60, 30)
+  resize(g, "lenz")
+  scales(g) == [1.0, 1.0, (FORTY / 30).round(4)]
+end
+
+check "an axis lock on the object does not block retyping a size" do
+  # no_scale_mask governs SketchUp's grips. It has no say over a transformation set
+  # from Ruby, and the labels must keep working under every one of them.
+  [0, 120, 126, 125, 123].all? do |mask|
+    g = box(100, 60, 30)
+    g.definition.behavior.no_scale_mask = mask
+    resize(g, "lenz")
+    scales(g) == [1.0, 1.0, (FORTY / 30).round(4)]
+  end
+end
+
+check "a nonsense entry resizes nothing" do
+  g = box(100, 60, 30)
+  resize(g, "lenz", "nonsense")
+  scales(g) == [1.0, 1.0, 1.0]
+end
+
+check "a selection of two goes through transform_entities instead" do
+  a = box(100, 60, 30)
+  b = box(10, 10, 10)
+  MODEL.selection.clear
+  MODEL.selection.add(a, b)
+  tool = TOOL.new(nil)
+  tool.instance_variable_set(:@active, true)
+  tool.instance_variable_set(:@tool_state, 0)
+  tool.instance_variable_set(:@model, MODEL)
+  tool.instance_variable_set(:@view, VIEW)
+  tool.instance_variable_set(:@selection, MODEL.selection)
+  tool.store_bounds_points
+  tool.compute_dimensions(VIEW, true)
+  $SU_CALLS[:transform_entities].clear
+  tool.lock_axis("lenz")
+  tool.onUserText("40", VIEW)
+  tr, entities = $SU_CALLS[:transform_entities].last
+  tr && tr.to_a[10] != 1.0 && entities.length == 2
+end
+
+# A label can be legitimately absent: a dimension seen end-on is a dot, and there is
+# nothing to draw or click. Which dimension that is depends on the camera, and it
+# used to be decided against the WORLD z axis rather than the box's own third edge.
+puts "\n--- which labels exist, and why one can be missing ---"
+
+# 90 degrees about x, so the box's third edge lies horizontal. Built as a matrix
+# because the shim's Transformation.rotation is still a stub.
+ROT_X90 = Geom::Transformation.new([1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1]).freeze
+
+def looking_from(x, y, z)
+  VIEW.camera.set(Geom::Point3d.new(x, y, z), Geom::Point3d.new(0, 0, 0))
+  yield
+ensure
+  VIEW.camera.set(Geom::Point3d.new(100, 100, 100), Geom::Point3d.new(0, 0, 0))
+end
+
+def axes_of(tool)
+  (tool.instance_variable_get(:@data_dims) || []).compact.map { |d| tool.dim_axis(d) }
+end
+
+def offsets_valid?(tool)
+  (tool.instance_variable_get(:@dims) || []).all? { |(_line, vec)| vec && vec.valid? }
+end
+
+check "a three-quarter view offers all three" do
+  axes_of(armed(box(100, 60, 30))).sort == %w[lenx leny lenz]
+end
+
+check "plan view drops the vertical one, it is a dot from there" do
+  looking_from(0, 0, 100) { !axes_of(armed(box(100, 60, 30))).include?("lenz") }
+end
+
+check "a rotated object keeps its third label in plan view" do
+  # The regression. Its third edge is horizontal, so the label draws perfectly well;
+  # testing the world axis threw it away and took the only way to retype that size.
+  looking_from(0, 0, 100) { axes_of(armed(box(100, 60, 30, ROT_X90))).include?("lenz") }
+end
+
+check "and that label still resizes the right axis" do
+  looking_from(0, 0, 100) do
+    g = box(100, 60, 30, ROT_X90)
+    resize(g, "lenz")
+    scales(g) == [1.0, 1.0, (FORTY / 30).round(4)]
+  end
+end
+
+check "looking down that edge drops it rather than offsetting by nothing" do
+  looking_from(0, 100, 0) do
+    tool = armed(box(100, 60, 30, ROT_X90))
+    !axes_of(tool).include?("lenz") && offsets_valid?(tool)
+  end
+end
+
 puts "\n--- result ---"
 if $fails.zero?
   puts "PASS — click selects the number, typing replaces it, the preview never lies"

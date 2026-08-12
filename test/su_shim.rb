@@ -20,6 +20,12 @@ module Sketchup
     def get_attribute(dict, key, default = nil)
       attributes[dict.to_s].fetch(key, default)
     end
+    # #same_dc_definition reads this, and so does the dc probe. nil when there are
+    # none, matching the real API -- a Hash would have made the `unless` guards
+    # written against nil unreachable.
+    def attribute_dictionaries
+      attributes.empty? ? nil : AttributeDictionaries.new(attributes)
+    end
     # Every real entity answers this, and it is never decoration: an undo or an
     # explode can delete one while plugin code still holds the reference, which
     # is exactly the situation GroupLock has to survive. A shim where valid? did
@@ -33,6 +39,25 @@ module Sketchup
     def mark_deleted!; @deleted = true; self; end
   end
   class Drawingelement < Entity; end
+  # entity.attribute_dictionaries["name"] -> a dictionary or nil, and the dictionary
+  # answers #keys and #[]. Deliberately does NOT auto-create a missing dictionary the
+  # way the backing Hash would: asking for one that is not there must read as absent.
+  class AttributeDictionaries
+    include Enumerable
+    def initialize(hash); @hash = hash; end
+    def [](name); @hash.key?(name.to_s) ? AttributeDictionary.new(name.to_s, @hash[name.to_s]) : nil; end
+    def keys; @hash.keys; end
+    def each; @hash.each_key { |name| yield(self[name]) }; self; end
+  end
+  class AttributeDictionary
+    include Enumerable
+    attr_reader :name
+    def initialize(name, hash); @name = name; @hash = hash; end
+    def [](key); @hash[key]; end
+    def []=(key, value); @hash[key] = value; end
+    def keys; @hash.keys; end
+    def each; @hash.each { |k, v| yield(k, v) }; self; end
+  end
   # A definition's behavior carries the no-scale mask the tool reads to know
   # which handles a component allows. 0 means "everything is scalable", which
   # is the plain case and the one worth defaulting to.
@@ -43,6 +68,10 @@ module Sketchup
     def no_scale_mask=(m); @mask = m; end
   end
   class ComponentDefinition < Drawingelement
+    # Named, because a Dynamic Component's formulas refer to components BY NAME and a
+    # name with a space in it is the reason they fail to parse.
+    attr_writer :name
+    def name; @name ||= ""; end
     def behavior; @behavior ||= Behavior.new; end
     def bounds; @bounds ||= Geom::BoundingBox.new; end
     def entities; @entities ||= Entities.new; end
@@ -110,12 +139,28 @@ module Sketchup
     end
     def add_entity(e); @items << e unless @items.include?(e); e.parent_entities = self; e; end
     def remove_entity(e); @items.delete(e); e.parent_entities = nil if e.parent_entities.equal?(self); e; end
-    def transform_entities(*); $SU_CALLS[:transform_entities] << true; true; end
+    # Records WHAT it was asked to do, not just that it was asked. `<< true` made
+    # a resize of a multi-object selection indistinguishable from a resize by zero.
+    def transform_entities(tr = nil, entities = nil)
+      $SU_CALLS[:transform_entities] << [tr, Array(entities)]
+      true
+    end
   end
   # Present so "is this a scale target?" can be answered in a test. The tool
   # accepts only things that respond to #definition, and raw geometry does not.
-  class Face < Drawingelement; end
-  class Edge < Drawingelement; end
+  #
+  # #bounds is what makes loose geometry measurable. A Face has no definition and
+  # no transformation, so its bounds are already in world coordinates -- and they
+  # are flat: zero extent on the axis the face has no thickness in, which is
+  # exactly why a hovered face gets two dimensions and not three. A shim without
+  # this raised NoMethodError, which the hover path rescues, so the labels simply
+  # never appeared and a test could not tell that from "not implemented".
+  class Face < Drawingelement
+    def bounds; @bounds ||= Geom::BoundingBox.new; end
+  end
+  class Edge < Drawingelement
+    def bounds; @bounds ||= Geom::BoundingBox.new; end
+  end
   class Color
     attr_accessor :red, :green, :blue, :alpha
     def initialize(r = 0, g = 0, b = 0, a = 255)
@@ -214,7 +259,22 @@ module Sketchup
     def add_observer(o); $SU_CALLS[:tools_observer] << o; true; end
   end
 
+  # The model's drawing axes. Dimension text is snapped to whichever of the six
+  # axis directions it sits closest to, so without this every label raised
+  # NoMethodError deep inside parse_dimemsion_geometry -- where it was rescued,
+  # and the dimension silently came back without any text.
+  class Axes
+    def origin; ORIGIN; end
+    def xaxis; X_AXIS; end
+    def yaxis; Y_AXIS; end
+    def zaxis; Z_AXIS; end
+    def axes; [origin, xaxis, yaxis, zaxis]; end
+    def to_a; [origin, xaxis, yaxis, zaxis]; end
+    def transformation; IDENTITY; end
+  end
+
   class Model
+    def axes; @axes ||= Axes.new; end
     def tools; @tools ||= Tools.new; end
     def select_tool(t); tools.stack.clear; tools.push_tool(t) if t; $SU_CALLS[:select_tool] << t; true; end
     def selection; @selection ||= Selection.new; end
@@ -242,11 +302,21 @@ module Sketchup
     def options; Hash.new { |h, k| h[k] = {} }; end
   end
 
+  # Movable now. It used to be four hardcoded readers, which fixed every test at
+  # one three-quarter view -- and where the dimension labels go, and whether the Z
+  # one exists at all, is decided by the camera. Plan view could not be expressed,
+  # so it could not be tested. Defaults are the old values, so nothing shifts.
   class Camera
-    def eye; Geom::Point3d.new(100, 100, 100); end
-    def target; ORIGIN; end
-    def up; Z_AXIS; end
-    def direction; Geom::Vector3d.new(-1, -1, -1).normalize; end
+    def set(eye, target, up = Z_AXIS)
+      @eye = eye
+      @target = target
+      @up = up
+      self
+    end
+    def eye; @eye ||= Geom::Point3d.new(100, 100, 100); end
+    def target; @target ||= ORIGIN; end
+    def up; @up ||= Z_AXIS; end
+    def direction; eye.vector_to(target).normalize; end
     def xaxis; X_AXIS; end
     def yaxis; Y_AXIS; end
     def zaxis; Z_AXIS; end
@@ -486,6 +556,10 @@ module UI
     def openpanel(*); nil; end
     def savepanel(*); nil; end
     def beep; true; end
+    # Recorded, not swallowed: "did the tool answer the cursor question at all" is
+    # the whole behaviour -- a tool that does not answer leaves whatever cursor was
+    # set last, which is the one being replaced.
+    def set_cursor(id); $SU_CALLS[:set_cursor] << id; true; end
     def start_timer(sec, repeat = false, &blk)
       id = $SU_TIMERS.size
       $SU_TIMERS << { id: id, sec: sec, repeat: repeat, proc: blk }
@@ -518,8 +592,18 @@ module Geom
     def vector_to(o); Vector3d.new(o[0] - @x, o[1] - @y, o[2] - @z); end
     def offset(vec, len = 1); self.class.new(@x + vec[0] * len, @y + vec[1] * len, @z + vec[2] * len); end
     def offset!(vec, len = 1); @x += vec[0] * len; @y += vec[1] * len; @z += vec[2] * len; self; end
-    def transform(_t); clone; end
-    def transform!(_t); self; end
+    # Honours the transformation now that Geom::Transformation is a real matrix.
+    # It used to return a clone, so every corner of every rotated or scaled object
+    # was reported at its untransformed position.
+    def transform(t)
+      t.respond_to?(:apply) ? t.apply(self) : clone
+    end
+
+    def transform!(t)
+      p2 = transform(t)
+      @x, @y, @z = p2.to_a
+      self
+    end
     def project_to_line(*); clone; end
     def project_to_plane(*); clone; end
     def on_plane?(*); false; end
@@ -590,44 +674,248 @@ module Geom
     def to_a; [@upper_left, @lower_right]; end
   end
 
+  # A real box, not a stub that swallowed every point and answered zero.
+  #
+  # Everything about a dimension is derived from these eight corners: which way
+  # each axis runs, how long it is, which edge the label hangs off. With the old
+  # stub all eight came back as the origin, every edge vector was invalid, and
+  # compute_dimensions_lines returned an empty list -- so a test could run the
+  # whole dimension pipeline and assert nothing, because nothing was produced.
+  #
+  # An empty box still answers Point3d.new to #min/#max, the way the stub did and
+  # the way SketchUp does, so nothing that was passing an empty box changes.
   class BoundingBox
-    def initialize(*); end
-    def add(*); self; end
-    def center; Point3d.new; end
-    def min; Point3d.new; end
-    def max; Point3d.new; end
-    def width; 0; end
-    def height; 0; end
-    def depth; 0; end
-    def empty?; true; end
-    def valid?; false; end
-    def diagonal; 0; end
-    def contains?(*); false; end
+    def initialize(*); @min = nil; @max = nil; end
+    # SketchUp takes points, arrays of points, other boxes, or loose x/y/z
+    # numbers, in any nesting. The numbers are what makes a buffer necessary:
+    # after flatten they are indistinguishable from anything else, so they are
+    # collected three at a time.
+    def add(*args)
+      nums = []
+      args.flatten.each do |item|
+        if item.is_a?(BoundingBox)
+          next if item.empty?
+
+          include_point(item.min)
+          include_point(item.max)
+        elsif item.is_a?(Numeric)
+          nums << item.to_f
+          if nums.size == 3
+            include_point(Point3d.new(*nums))
+            nums.clear
+          end
+        elsif item.respond_to?(:x)
+          include_point(item)
+        end
+      end
+      self
+    end
+    def include_point(pt)
+      if @min.nil?
+        @min = Point3d.new(pt.x, pt.y, pt.z)
+        @max = Point3d.new(pt.x, pt.y, pt.z)
+        return self
+      end
+      @min = Point3d.new([@min.x, pt.x].min, [@min.y, pt.y].min, [@min.z, pt.z].min)
+      @max = Point3d.new([@max.x, pt.x].max, [@max.y, pt.y].max, [@max.z, pt.z].max)
+      self
+    end
+    def center
+      return Point3d.new if empty?
+
+      Point3d.new((@min.x + @max.x) / 2.0, (@min.y + @max.y) / 2.0, (@min.z + @max.z) / 2.0)
+    end
+    def min; @min ? @min.clone : Point3d.new; end
+    def max; @max ? @max.clone : Point3d.new; end
+    def width; empty? ? 0 : @max.x - @min.x; end
+    def height; empty? ? 0 : @max.y - @min.y; end
+    def depth; empty? ? 0 : @max.z - @min.z; end
+    def empty?; @min.nil?; end
+    def valid?; !empty?; end
+    def diagonal; empty? ? 0 : @min.distance(@max); end
+    def contains?(pt)
+      return false if empty?
+      return false unless pt.respond_to?(:x)
+
+      pt.x >= @min.x && pt.x <= @max.x && pt.y >= @min.y && pt.y <= @max.y &&
+        pt.z >= @min.z && pt.z <= @max.z
+    end
     def intersect(*); BoundingBox.new; end
-    def clear; self; end
-    def corner(_i); Point3d.new; end
+    def clear; @min = nil; @max = nil; self; end
+    # SketchUp's corner order, and the plugin depends on every bit of it:
+    # 0->1 is the x edge, 0->2 is y, 0->4 is z, which is how compute_selected_bounds
+    # tells lenx from leny from lenz.
+    CORNERS = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0],
+               [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]].freeze
+    def corner(i)
+      return Point3d.new if empty?
+
+      sx, sy, sz = CORNERS[i.to_i] || CORNERS[0]
+      Point3d.new(sx.zero? ? @min.x : @max.x,
+                  sy.zero? ? @min.y : @max.y,
+                  sz.zero? ? @min.z : @max.z)
+    end
   end
 
+  # A real 4x4, column-major, in SketchUp's to_a order:
+  #
+  #   [ xaxis.x xaxis.y xaxis.z 0 | yaxis... | zaxis... | origin.x origin.y origin.z 1 ]
+  #
+  # It was a stub that answered every question with itself: .scaling ignored its
+  # arguments, #* returned self, #to_a returned sixteen zeros. Everything about
+  # SIZE therefore came out identical whatever the plugin did, so the entire
+  # resize path -- the point of the dimension labels -- was invisible to the
+  # tests. dim_edit_test.rb could only ever check the state machine in front of
+  # it, and did.
   class Transformation
-    def initialize(*); end
-    def self.scaling(*); new; end
-    def self.translation(*); new; end
+    IDENT = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0].freeze
+
+    def initialize(*args)
+      @m = case args.first
+           when Array then args.first.map(&:to_f)
+           when Transformation then args.first.to_a
+           else IDENT.dup
+           end
+    end
+
+    def self.from_a(m)
+      new(m)
+    end
+
+    # scaling(s) | scaling(sx, sy, sz) | scaling(point, s) | scaling(point, sx, sy, sz)
+    # The point form is the one #set_dim_value uses for a multi-object selection: it
+    # scales about a point on the far side of the box, so the opposite face stays put.
+    def self.scaling(*args)
+      point = args.first.is_a?(Point3d) ? args.shift : nil
+      sx, sy, sz = args.length == 1 ? [args[0]] * 3 : args[0, 3]
+      m = IDENT.dup
+      m[0] = sx.to_f
+      m[5] = sy.to_f
+      m[10] = sz.to_f
+      s = new(m)
+      point ? translation(point.to_a) * s * translation(point.to_a.map { |v| -v }) : s
+    end
+
+    def self.translation(vec)
+      m = IDENT.dup
+      m[12], m[13], m[14] = vec.to_a[0, 3].map(&:to_f)
+      new(m)
+    end
+
     def self.rotation(*); new; end
     def self.axes(*); new; end
-    def to_a; Array.new(16, 0.0); end
-    def *(_o); self; end
-    def inverse; self; end
-    # Identity axes. dim_axis compares a dimension's direction against these to
-    # decide which length it is, so a transformation without them cannot answer
-    # the one question the whole context menu is keyed on.
-    def origin; Point3d.new(0, 0, 0); end
-    def xaxis; Vector3d.new(1, 0, 0); end
-    def yaxis; Vector3d.new(0, 1, 0); end
-    def zaxis; Vector3d.new(0, 0, 1); end
+
+    def to_a; @m.dup; end
+
+    def *(other)
+      return apply(other) if other.is_a?(Point3d) # covers Vector3d, its subclass
+
+      b = other.respond_to?(:to_a) ? other.to_a : IDENT
+      out = Array.new(16, 0.0)
+      4.times do |col|
+        4.times do |row|
+          sum = 0.0
+          4.times { |k| sum += @m[k * 4 + row] * b[col * 4 + k] }
+          out[col * 4 + row] = sum
+        end
+      end
+      self.class.new(out)
+    end
+
+    # Point3d#transform routes here, so a transformed corner actually moves.
+    def apply(point)
+      x, y, z = point.to_a
+      klass = point.is_a?(Vector3d) ? Vector3d : Point3d
+      w = point.is_a?(Vector3d) ? 0.0 : 1.0
+      klass.new(@m[0] * x + @m[4] * y + @m[8] * z + @m[12] * w,
+                @m[1] * x + @m[5] * y + @m[9] * z + @m[13] * w,
+                @m[2] * x + @m[6] * y + @m[10] * z + @m[14] * w)
+    end
+
+    def identity?
+      @m.each_with_index.all? { |v, i| (v - IDENT[i]).abs < 1e-10 }
+    end
+
+    def inverse
+      # Only ever asked of the scale-and-translate matrices built above, which is
+      # all this needs to invert. A rotation would come out wrong, so say so rather
+      # than return a plausible matrix.
+      raise "shim: inverse of a rotated transformation is not implemented" unless
+        [1, 2, 4, 6, 8, 9].all? { |i| @m[i].abs < 1e-10 }
+
+      m = IDENT.dup
+      [0, 5, 10].each_with_index do |d, axis|
+        m[d] = @m[d].zero? ? 0.0 : 1.0 / @m[d]
+        m[12 + axis] = @m[d].zero? ? 0.0 : -@m[12 + axis] / @m[d]
+      end
+      self.class.new(m)
+    end
+
+    # dim_axis compares a dimension's direction against these to decide which
+    # length it is, so a transformation without them cannot answer the one
+    # question the whole context menu is keyed on. Read off the matrix now, not
+    # hardcoded to identity.
+    def origin; Point3d.new(@m[12], @m[13], @m[14]); end
+    def xaxis; Vector3d.new(@m[0], @m[1], @m[2]); end
+    def yaxis; Vector3d.new(@m[4], @m[5], @m[6]); end
+    def zaxis; Vector3d.new(@m[8], @m[9], @m[10]); end
   end
 
   def self.intersect_line_plane(*); Point3d.new; end
-  def self.linear_combination(*); Point3d.new; end
+  # Utils#midpoint is this call and nothing else, and a stub that returned the
+  # origin put every midpoint of every box at the origin -- which is where the
+  # scale grips are drawn and where the dimension lines are measured from.
+  def self.linear_combination(w1, p1, w2, p2)
+    Point3d.new(w1 * p1[0] + w2 * p2[0],
+                w1 * p1[1] + w2 * p2[1],
+                w1 * p1[2] + w2 * p2[2])
+  end
+  # Was missing entirely, so anything that reached it died of NoMethodError. It
+  # is how the plugin decides the cursor is over a dimension's label -- the whole
+  # hover mechanism -- and how it checks a point is on screen.
+  #
+  # Ray casting on x/y. Accepts Point3d or plain [x, y] for both the point and the
+  # polygon, because both forms are passed at the existing call sites.
+  def self.point_in_polygon_2D(point, polygon, on_boundary = false)
+    px = point[0].to_f
+    py = point[1].to_f
+    pts = polygon.map { |pt| [pt[0].to_f, pt[1].to_f] }
+    return false if pts.size < 3
+
+    inside = false
+    pts.each_index do |i|
+      ax, ay = pts[i]
+      bx, by = pts[(i + 1) % pts.size]
+      # On an edge: SketchUp lets the caller say whether that counts.
+      if (ax - px).abs < 1e-9 && (ay - py).abs < 1e-9
+        return on_boundary
+      end
+      if ((ay > py) != (by > py))
+        x_cross = ax + (py - ay) / (by - ay) * (bx - ax)
+        if (x_cross - px).abs < 1e-9
+          return on_boundary
+        end
+
+        inside = !inside if px < x_cross
+      end
+    end
+    inside
+  end
+  # Triangles for one glyph outline. Missing before, which meant text_geometry
+  # raised, was rescued, and handed back nil: every dimension came out without a
+  # label and no test could tell that from a dimension that was never computed.
+  # A fan off the first vertex, which is what a convex-enough glyph loop wants;
+  # holes are ignored, since no assertion depends on the interior of a letter.
+  def self.tesselate(loop, *_holes)
+    pts = loop.to_a
+    return [] if pts.size < 3
+
+    triangles = []
+    (1...(pts.size - 1)).each do |i|
+      triangles << pts[0] << pts[i] << pts[i + 1]
+    end
+    triangles
+  end
 end
 
 # In SketchUp a Length is a Float subclass. Plain Ruby cannot instantiate one --
@@ -742,3 +1030,13 @@ module Kernel
 end
 
 require "tmpdir"
+
+# SketchUp's own Dynamic Components extension. ScalePPTool#dc_redraw pokes its
+# observer to make a DC recompute after a resize, and reaching for a constant that
+# does not exist raised NameError inside the resize -- swallowed by the rescue
+# around it, so the resize looked like it simply did nothing. Present and empty is
+# the honest shim: ObjectSpace finds no observer and dc_redraw returns early, which
+# is also what happens in a SketchUp with DC disabled.
+module DCObservers
+  class DCToolsObserver; end
+end
