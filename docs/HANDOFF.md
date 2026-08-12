@@ -10,6 +10,15 @@ Extension SketchUp, dựng lại từ **Curic Scale++ 1.1.2** bản bị RubyEnc
 Toàn bộ cây nguồn hiện tại là Ruby thuần, đã đổi tên thành **HTU ScalePlus** và bỏ
 hết phần kiểm tra license lẫn gọi về server của tác giả gốc.
 
+Chỗ cuối cùng gọi về server đã bỏ trong đợt kiểm tra trước khi giao khách: `module
+Update` trong `utils.rb` (~270 dòng) — tự tải bản mới từ `curic.io`, có cả dialog
+"Download and Install" và `UI.openURL`. Hai chỗ gọi nó (menu "Check for Update" và
+timer 10 giây lúc khởi động) đã bỏ từ trước, nhưng **code vẫn ship và vẫn nạp vào
+memory**, và vẫn tải-cài được file nếu có gì gọi tới. `curic_icon.png` cũng đã xoá.
+`load_test.rb` khoá lại bằng hai check: `Update` không được định nghĩa, và **không
+dòng code sống nào** (comment thì được) nhắc tới `curic` — check thứ hai in ra đúng
+file:dòng khi bị vi phạm.
+
 Việc nó làm: bám lên **Scale tool có sẵn của SketchUp**, vẽ thêm số đo lên khung
 bao của đối tượng đang chọn, cho gõ số trực tiếp vào số đo đó, giữ một danh sách
 kích thước hay dùng, và khoá trục scale.
@@ -106,11 +115,36 @@ SketchUp, còn transformation đặt từ Ruby thì mọi mask đều đổi đ�
 **Danh sách kích thước đã lưu** — chuột phải vào số đo:
 
 ```
-45 / 200 / 400      <- tick khi trùng kích thước hiện tại
+Favorite Dimensions     <- heading xám, chỉ hiện khi có giá trị đã lưu
+45 / 200 / 400          <- tick khi trùng kích thước hiện tại
 --------
-Open list...        <- mở cửa sổ Dimensions: thêm, xoá từng cái, xoá hết
-Text size >         Small / Medium / Large
+Referenced Dimensions   <- heading xám, chỉ hiện khi tìm được
+900 (in model)          <- kích thước instance khác cùng definition đang có
+--------
+Open list...            <- mở cửa sổ Dimensions: thêm, xoá từng cái, xoá hết
+Show Manager            <- dialog Vue DimsUI (bản gốc)
+Text size >             Small / Medium / Large
 ```
+
+Khi **chưa lưu gì**, khối trên cùng đổi thành hai gợi ý nửa/đôi:
+
+```
+225 (x0.5)
+900 (x2.0)
+```
+
+**Bốn thứ trong menu này là của Scale++ gốc và từng bị mất** trong lúc viết
+`dim_menu.rb`: hai gợi ý nửa/đôi, hai heading xám, `Referenced Dimensions`, và
+`Show Manager`. Nặng nhất là gợi ý nửa/đôi — máy mới cài chưa lưu gì thì đó là
+**toàn bộ** những gì menu có, mất nó thì chuột phải ra một menu không có kích thước
+nào để bấm. `Show Manager` là **đường duy nhất** mở được DimsUI, mà DimsUI vẫn ship
+11 file và `observer.rb` vẫn refresh nó mỗi lần đổi selection.
+
+`Referenced Dimensions` = `ScalePPTool#referenced_dims(axis)`: đi qua mọi instance của
+mọi definition trùng tên `dynamic_attributes` với definition đang chọn, đo cạnh theo
+đúng trục vừa bấm. Trừ đi các giá trị đã lưu (đã liệt kê ở trên) và trừ chính kích
+thước hiện tại (bấm vào sẽ không làm gì). Group thường không có tên DC nên chỉ soi
+definition của chính nó — một group đứng một mình thì khối này không hiện.
 
 **Một danh sách chung cho cả ba trục**. Trục vẫn được truyền xuyên suốt vì chọn một
 kích thước thì phải áp vào đúng trục vừa bấm — chỉ chỗ *lưu* là chung.
@@ -489,6 +523,16 @@ Những chỗ đã phải sửa vì lý do đó:
 - `DCObservers` từng **không tồn tại** → `dc_redraw` raise NameError **ở giữa phép resize**,
   bị rescue quanh nó nuốt, và resize trông như không làm gì cả. Nay có và rỗng: `ObjectSpace`
   không tìm thấy observer nào nên `dc_redraw` return sớm — đúng như SketchUp tắt DC
+- `ComponentDefinition` từng **không có `instances`**, entity không có `parent`, và
+  `InstancePath` là stub không có `transformation`. Ba thứ đó là toàn bộ đường đi của
+  `Referenced Dimensions`: `Utils#get_path` chết ở `i.parent`, và nếu qua được thì mọi
+  instance đo ra **cùng một kích thước** vì transform bị bỏ. Nay definition tự vào
+  `model.definitions` lúc tạo, `Entities` nhớ `owner` để entity trả `parent` được, và
+  `InstancePath#transformation` nhân dồn theo path.
+  Một cái bẫy ở đây: back-link phải làm ở **cả hai phía**. Lúc đầu chỉ `definition` (reader)
+  gọi `add_instance`, nên một test gán definition dùng chung rồi không đọc lại thì
+  `instances` vẫn rỗng — hai instance mà đi qua chỉ thấy một. Cả reader lẫn writer đều
+  đăng ký, và mutation test có riêng một mục cho chuyện đó
 
 Nguyên tắc: nếu một lỗi thật lọt qua được shim, sửa shim trước, rồi mới viết test.
 
