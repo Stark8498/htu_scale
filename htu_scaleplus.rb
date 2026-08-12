@@ -8,7 +8,7 @@ module TRINH_VAN_PHUC
     PLUGIN_ID = 'ScalePlus'.freeze
     PLUGIN_NAME = 'HTU ScalePlus'.freeze
     AUTHOR = 'Trinh Van Phuc'.freeze
-    PLUGIN_VERSION = '1.1.2'.freeze
+    PLUGIN_VERSION = '1.2'.freeze
     PATH_ROOT = File.dirname(__FILE__).freeze
     PATH = File.join(PATH_ROOT, 'htu_scaleplus').freeze
     unless file_loaded?(__FILE__)
