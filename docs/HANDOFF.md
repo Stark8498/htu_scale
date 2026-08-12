@@ -444,12 +444,16 @@ ruby build.rb
 ```
 
 Chạy `ruby -c` cho toàn bộ 49 file, rồi 13 gate. Fail bất kỳ gate nào là **không**
-đóng gói. Ra `dist/htu_scaleplus-1.2.rbz` (62 file, ~493 KB).
+đóng gói. Ra `dist/htu_scaleplus-1.2.1.rbz` (60 file, ~473 KB).
 
-Version nằm **một chỗ duy nhất**: `PLUGIN_VERSION` trong `htu_scaleplus.rb`. `build.rb`
-đọc nó bằng regex để đặt tên .rbz, nên đổi ở đó là đủ cho phần đóng gói. Con số `1.1.2`
-còn lại trong `README_BUILD.md` và HANDOFF §1 là **version của Curic Scale++ gốc** — thứ
-bản này được dựng lại từ đó — không phải version của plugin này, đừng sửa theo.
+Version nằm **một chỗ duy nhất**: `PLUGIN_VERSION` trong `htu_scaleplus.rb` (hiện
+**1.2.1**). `build.rb` đọc nó bằng regex để đặt tên .rbz, nên đổi ở đó là đủ — không có
+bản sao nào khác trong code. Banner đầu `loader.rb` từng ghi số version và đã bỏ đi
+chính vì thế: một bản sao trong comment là một bản sao sẽ lệch.
+
+Con số `1.1.2` còn lại trong `README_BUILD.md` và HANDOFF §1 là **version của Curic
+Scale++ gốc** — thứ bản này được dựng lại từ đó — không phải version của plugin này,
+đừng sửa theo.
 
 | Gate | File |
 |---|---|

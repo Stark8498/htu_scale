@@ -1,5 +1,7 @@
 # =============================================================================
-#  HTU ScalePlus 1.2 — loader.rb (plaintext)
+#  HTU ScalePlus — loader.rb (plaintext)
+#  (no version number here on purpose: it lives only in htu_scaleplus.rb, and a
+#  copy in a banner is a copy that goes stale)
 # =============================================================================
 #  Recovered from the captured RubyEncoder AST (call #1, buffer
 #  The plugin runs entirely from plain Ruby source.

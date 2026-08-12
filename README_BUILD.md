@@ -4,10 +4,12 @@ A fully plaintext, installable rebuild of Curic Scale++ assembled from the
 decompiled AST. The RubyEncoder blob is gone: every line the plugin runs is
 readable Ruby, and the `rgloader` native loader is no longer shipped or needed.
 
-Build: `ruby build.rb` → `dist/htu_scaleplus-1.2.rbz`
+Build: `ruby build.rb` → `dist/htu_scaleplus-<version>.rbz`
 
 The 1.1.2 in the title above is the **upstream** version this was rebuilt from. The
-rebuild itself is renamed and versioned on its own: HTU ScalePlus 1.2.
+rebuild itself is renamed and versioned on its own: currently HTU ScalePlus 1.2.1,
+set in one place only — `PLUGIN_VERSION` in `htu_scaleplus.rb`, which is also where
+`build.rb` reads the .rbz filename from.
 
 ---
 
@@ -18,7 +20,7 @@ curic_scale_pp_src/
 ├── build.rb                     # verify + package; refuses to build if a test fails
 ├── README_BUILD.md              # this file
 ├── dist/
-│   └── htu_scaleplus-1.2.rbz    # 62 files, ~486 KB
+│   └── htu_scaleplus-1.2.1.rbz  # 60 files, ~473 KB
 ├── test/                        # not shipped in the .rbz
 │   ├── su_shim.rb               # SketchUp API shim (load harness)
 │   ├── load_test.rb             # loads the plugin end to end
@@ -141,7 +143,7 @@ plugin ships and works. Scale correctness must be checked in SketchUp.
 
 1. `ruby build.rb`
 2. SketchUp → **Extensions ▸ Extension Manager ▸ Install Extension…**
-3. Pick `dist/htu_scaleplus-1.2.rbz`
+3. Pick `dist/htu_scaleplus-1.2.1.rbz`
 4. Restart SketchUp.
 
 To package by hand instead: zip the contents of this folder **excluding**
