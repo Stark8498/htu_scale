@@ -1,7 +1,7 @@
 module TRINH_VAN_PHUC::HTU_ScalePlus
   class << self
     attr_accessor(:active)
-    attr_reader(:cmd_reset, :cmd_xyz, :cmd_x, :cmd_y, :cmd_z, :cmd_dim, :cmd_hover_dim, :cmds)
+    attr_reader(:cmd_reset, :cmd_xyz, :cmd_x, :cmd_y, :cmd_z, :cmd_dim, :cmds)
   end
   BEHAVIOR_SECTION = "htu_behavior".freeze
   BEHAVIOR_ALL = 0
@@ -90,17 +90,6 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   def self.show_dim?
     Sketchup.read_default(PLUGIN_NAME, "show_dim", true)
   end
-  # Dimensions on whatever the cursor is over, as opposed to show_dim? which is
-  # the dimensions of what is selected. Separate preference because they answer
-  # different questions -- "how big is the thing I am scaling" against "how big
-  # is that one" -- and a busy model is where someone is most likely to want the
-  # second one off while keeping the first.
-  def self.toggle_hover_dimensions
-    Sketchup.write_default(PLUGIN_NAME, "hover_dim", !show_hover_dim?)
-  end
-  def self.show_hover_dim?
-    Sketchup.read_default(PLUGIN_NAME, "hover_dim", true)
-  end
   def self.build_commands
     all = 0
     xyz = 120
@@ -151,32 +140,6 @@ end
         MF_ENABLED
       end
     end
-    # No re-pick of the Scale tool here, unlike the toggle above: nothing is
-    # recomputed by turning this on or off, the next mouse move rebuilds the
-    # labels by itself, and re-picking the tool would drop a typed dimension.
-    @cmd_hover_dim = UI::Command.new("Toggle hover dimensions") do
-  toggle_hover_dimensions
-  begin
-    overlay = PLUGIN.active_overlay
-    tool = overlay && overlay.dim_scale
-    if tool && !show_hover_dim?
-      tool.clear_hover
-    end
-    Sketchup.active_model.active_view.invalidate
-  rescue StandardError => e
-    p(e)
-  end
-end
-    @cmd_hover_dim.small_icon = File.join(PATH_R, "snapping_length.png")
-    @cmd_hover_dim.large_icon = File.join(PATH_R, "snapping_length.png")
-    @cmd_hover_dim.tooltip = "Show dimensions of the object under the cursor"
-    @cmd_hover_dim.set_validation_proc do
-      if show_hover_dim?
-        MF_CHECKED
-      else
-        MF_ENABLED
-      end
-    end
     cmds = {}
     cmds[@cmd_reset] = all
     cmds[@cmd_xyz] = xyz
@@ -194,8 +157,17 @@ end
       end
     end
     cmds[@cmd_dim] = 0
-    cmds[@cmd_hover_dim] = 0
     @cmds = cmds
+  end
+
+  # Which of them get a toolbar button.
+  #
+  # All six stay in the menu -- that is the only place Preferences > Shortcuts
+  # looks, and a key is the whole point of the per-axis ones. On the toolbar they
+  # were six near-identical cubes to read at a glance, and only two get pressed
+  # by hand: the lock, and the way back off it.
+  def self.toolbar_cmds
+    [@cmd_reset, @cmd_xyz, @cmd_dim].compact
   end
   def self.toggle
     PLUGIN.active_overlay.enabled = !PLUGIN.active_overlay.enabled?

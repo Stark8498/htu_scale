@@ -217,21 +217,21 @@ end
 puts "\n--- the real Scale tool keeps its grips ---"
 
 # Stands in for ScalePPTool so the two decisions the overlay makes -- dispatch the
-# move, and take the stack -- can be read off directly. #wants_push? is fixed
+# move, and take the stack -- can be read off directly. #on_hover? is fixed
 # rather than derived, because what is being tested is what the overlay does with
 # the answer, not how the tool arrives at it.
 class ToolSpy
   attr_accessor :on_push_tool, :active
   attr_reader :moves
   def initialize(wants_push)
-    @wants_push = wants_push
+    @on_hover = wants_push
     @on_push_tool = false
     @active = true
     @moves = []
   end
   def tool_name; "ScaleTool"; end
   def active?; @active; end
-  def wants_push?; @wants_push; end
+  def on_hover?; @on_hover; end
   def onMouseMove(_flags, x, y, _view); @moves << [x, y]; end
   def draw(*); end
 end

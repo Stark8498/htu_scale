@@ -18,9 +18,10 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       # is dragging the camera, and both used to.
       #
       # An orbit moves the selection's box across the screen under a cursor being
-      # held still, so #own_click? flips to true on its own and the tool grabs the
-      # stack -- suspending the real Scale tool and its grips in the middle of an
-      # orbit, which is the one thing the user was looking at.
+      # held still, so a dimension label slides under that cursor by itself,
+      # #on_hover? turns true and the tool grabs the stack -- suspending the real
+      # Scale tool and its grips in the middle of an orbit, which is the one thing
+      # the user was looking at.
       #
       # And ScalePPTool#onMouseMove can decide to hand the stack back, but
       # #pop_tool pops whatever is on TOP, which during a navigation is SketchUp's
@@ -45,27 +46,22 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
         unless tool.active?
           next
         end
+        # Skipped when the tool is on the stack: SketchUp is calling its
+        # #onMouseMove itself there, and calling it again here would double every
+        # mouse event.
         if at != tool
           tool.onMouseMove(flags, x, y, view)
-          next
-        end
-        # The tool is on the stack, so SketchUp is calling its #onMouseMove
-        # itself and calling it again here would double every mouse event. The
-        # hover labels still have to be kept up to date though, and this is the
-        # only callback that arrives either way -- an overlay gets mouse moves
-        # whichever tool is active.
-        if tool.respond_to?(:update_hover)
-          tool.update_hover(x, y, view)
         end
       end
       active_tool = @tools.find do |t|
   t.active?
 end
       if active_tool && active_tool.tool_name == "ScaleTool"
-        # wants_push?, not on_hover?: the tool now also takes the stack away
-        # from the grips, so a click on another object can switch the scale to
-        # it instead of being swallowed. It decides; this only relays.
-        if !active_tool.on_push_tool && active_tool.wants_push?
+        # on_hover? -- the cursor is over a dimension's own text. That is the only
+        # reason this tool ever takes the stack: overlays get no mouse-button
+        # callback, so catching the click that locks an axis means being a tool for
+        # as long as the cursor is on the label, and no longer.
+        if !active_tool.on_push_tool && active_tool.on_hover?
           active_tool.on_push_tool = true
           Sketchup.active_model.tools.push_tool(active_tool)
         end

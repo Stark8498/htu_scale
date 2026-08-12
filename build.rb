@@ -70,11 +70,10 @@ puts "  ruby -c            : OK (#{Dir.glob(File.join(ROOT, '**', '*.rb')).size}
   "dim menu test"      => "test/dim_menu_test.rb",
   "dim edit test"      => "test/dim_edit_test.rb",
   "add dialog test"    => "test/dim_add_dialog_test.rb",
-  "retarget test"      => "test/retarget_test.rb",
+  "grips test"         => "test/grips_test.rb",
   "behavior test"      => "test/behavior_test.rb",
   "group lock test"    => "test/group_lock_test.rb",
   "navigation test"    => "test/navigation_test.rb",
-  "hover dims test"    => "test/hover_dims_test.rb",
   "text size test"     => "test/text_size_persistence_test.rb",
   # Not shipped, but it decides which files reach SketchUp during every test round,
   # and when its file list goes stale it says "reloaded" and skips one in silence.

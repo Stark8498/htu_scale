@@ -197,11 +197,10 @@ end
 
 puts "\n--- the buttons themselves ---"
 
-# cmds also carries the two dimension toggles, which have nothing to do with
-# scale handles and are checked on their own rules.
+# cmds also carries the dimension toggle, which has nothing to do with scale
+# handles and is checked on its own rules.
 def scale_cmds
-  toggles = [PLUG.cmd_dim, PLUG.cmd_hover_dim]
-  PLUG.cmds.reject { |cmd, _| toggles.any? { |t| cmd.equal?(t) } }
+  PLUG.cmds.reject { |cmd, _| cmd.equal?(PLUG.cmd_dim) }
 end
 
 # They used to gray out unless exactly one component was selected, which was the

@@ -86,20 +86,41 @@ check "the page wires up every callback the Ruby side registers" do
   end
 end
 
+# Two listeners now cancel a browser default, and both exempt the entry field the
+# same way -- so a bare include? of either half passes on the strength of the
+# other one. Read the named listener's own body instead.
+def listener(html, event)
+  at = html.index("document.addEventListener('#{event}'")
+  return "" unless at
+
+  html[at, html.index("});", at).to_i - at + 3]
+end
+
 # An HtmlDialog is a browser, so Ctrl+A selected every word on the page and left
 # the heading, the buttons and the whole list highlighted blue. Two halves to the
 # fix and both are needed: user-select stops the highlight, preventDefault stops
 # the keystroke being handled at all.
 check "Ctrl+A does not select the whole window" do
-  html = dialog.html
-  html.include?("user-select: none") && html.include?("e.preventDefault()")
+  body = listener(dialog.html, "keydown")
+  dialog.html.include?("user-select: none") && body.include?("e.preventDefault()")
 end
 
 # The entry field is a text field and must keep behaving like one -- selecting
 # what was typed is the one place Ctrl+A is worth having.
 check "but it still selects the text in the entry field" do
-  html = dialog.html
-  html.include?("user-select: text") && html.include?("tag === 'INPUT'")
+  dialog.html.include?("user-select: text") &&
+    listener(dialog.html, "keydown").include?("tag === 'INPUT'")
+end
+
+# Right-clicking the page opened Chromium's own menu: Back, Forward, Print, View
+# page source, DevTools. Nothing there belongs to a three-control dialog.
+check "right-clicking the window opens no browser menu" do
+  listener(dialog.html, "contextmenu").include?("e.preventDefault()")
+end
+
+# The one place a right-click is worth having: pasting a size list in.
+check "but the entry field keeps its cut, copy and paste" do
+  listener(dialog.html, "contextmenu").include?("tag === 'INPUT'")
 end
 
 puts "\n--- adding without the window going away ---"

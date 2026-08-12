@@ -64,16 +64,24 @@ rescue Exception => e
 end
 
 puts "\n--- toolbar contents ---"
-# The six behaviour commands lost their only home when the pet toolbar went, so
-# the real toolbar has to carry them: 1 overlay toggle + 6.
+# Four buttons: the overlay toggle, the lock, the way back off it, and the
+# dimension toggle. The per-axis three are deliberately not here -- eight cubes
+# in a row could not be told apart at a glance, and they are still one keystroke
+# away through the menu.
 tb_items = $SU_CALLS[:toolbar_item].map(&:last)
 puts "  items (#{tb_items.size}) : #{tb_items.inspect}"
-%w[Behavior\ Scale\ All Behavior\ Scale\ XYZ Behavior\ Scale\ X Behavior\ Scale\ Y
-   Behavior\ Scale\ Z Toggle\ show\ dimensions].each do |label|
+["ScalePlus", "Behavior Scale All", "Behavior Scale XYZ",
+ "Toggle show dimensions"].each do |label|
   next if tb_items.include?(label)
 
   fails += 1
   puts "  MISSING from toolbar: #{label}"
+end
+["Behavior Scale X", "Behavior Scale Y", "Behavior Scale Z"].each do |label|
+  next unless tb_items.include?(label)
+
+  fails += 1
+  puts "  back on the toolbar: #{label}"
 end
 
 puts "\n--- menu entries, which is what makes a shortcut assignable ---"

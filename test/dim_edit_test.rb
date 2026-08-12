@@ -317,6 +317,91 @@ check "looking down that edge drops it rather than offsetting by nothing" do
   end
 end
 
+# Being on the tool stack is the whole cost of this feature: an overlay gets no
+# mouse-button callback, so catching the click that locks an axis means being a tool,
+# and being a tool suspends SketchUp's Scale tool and its grips. So the tool must hold
+# the stack for exactly as long as it needs the mouse and not a frame longer.
+#
+# There was a second reason to hold it -- retarget, where a click away from the
+# selection switched the scale to another object. That went, and these checks are what
+# replaced its. The one that matters most is the last: a click off a label must now
+# leave the selection alone, because SketchUp's own Scale tool is getting it.
+puts "\n--- holding the tool stack, and letting go ---"
+
+def hovering(hover)
+  tool = TOOL.new(nil)
+  tool.instance_variable_set(:@active, true)
+  tool.instance_variable_set(:@tool_state, 0)
+  tool.instance_variable_set(:@model, MODEL)
+  tool.instance_variable_set(:@view, VIEW)
+  tool.instance_variable_set(:@bb_data, { :points => [] })
+  # bb_text_2d is the label's screen box; an empty polygon is never hit, a big one
+  # always is. #onMouseMove recomputes :hover from it on every move.
+  box = hover ? [[0, 0], [9999, 0], [9999, 9999], [0, 9999]] : []
+  dim = { :hover => hover, :bb_text_2d => box,
+          :line => [Geom::Point3d.new(0, 0, 0), Geom::Point3d.new(10, 0, 0)] }
+  tool.instance_variable_set(:@data_dims, [dim])
+  tool.instance_variable_set(:@tr_bb, Geom::Transformation.new)
+  tool
+end
+
+def pops?(tool)
+  MODEL.tools.stack.clear
+  before = $SU_CALLS[:pop_tool].size
+  tool.onMouseMove(0, 500, 400, VIEW)
+  $SU_CALLS[:pop_tool].size > before
+end
+
+check "the cursor on a label keeps the stack, that is what it is for" do
+  tool = hovering(true)
+  tool.on_push_tool = true
+  !pops?(tool)
+end
+
+check "off the label it hands the stack straight back" do
+  tool = hovering(false)
+  tool.on_push_tool = true
+  pops?(tool)
+end
+
+# A nudge of the mouse would otherwise discard everything typed so far.
+check "but not while an axis is locked and a number is being typed" do
+  tool = hovering(false)
+  tool.on_push_tool = true
+  tool.lock_axis("lenx")
+  !pops?(tool)
+end
+
+check "a click on the label locks its axis" do
+  tool = hovering(true)
+  tool.onLButtonDown(0, 500, 400, VIEW)
+  tool.locked_axis == "lenx"
+end
+
+check "a click off the label releases the lock and gives the stack back" do
+  tool = hovering(false)
+  tool.on_push_tool = true
+  tool.lock_axis("lenx")
+  MODEL.tools.stack.clear
+  before = $SU_CALLS[:pop_tool].size
+  tool.onLButtonDown(0, 500, 400, VIEW)
+  tool.locked_axis.nil? && $SU_CALLS[:pop_tool].size > before
+end
+
+# Retarget is gone, and this is the check that says so: the click belongs to
+# SketchUp's Scale tool now, and it is the only thing that may change the selection.
+check "and it does NOT change what is selected" do
+  target = box(100, 60, 30)
+  MODEL.selection.clear
+  MODEL.selection.add(target)
+  other = box(10, 10, 10)
+  VIEW.pick_helper.picked = other
+  tool = hovering(false)
+  tool.on_push_tool = true
+  tool.onLButtonDown(0, 500, 400, VIEW)
+  MODEL.selection.to_a == [target]
+end
+
 puts "\n--- result ---"
 if $fails.zero?
   puts "PASS — click selects the number, typing replaces it, the preview never lies"

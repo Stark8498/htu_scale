@@ -103,11 +103,12 @@ module TRINH_VAN_PHUC
       tb.add_item(cmd)
       # The behaviour commands and the dimension toggle used to live only on the
       # pet toolbar. They already carry icons, tooltips and validation procs, so
-      # they work unchanged as native toolbar buttons -- and the procs gray them
-      # out unless exactly one component is selected, which is what keeps
-      # set_behavior from dereferencing a nil selection.
+      # they work unchanged as native toolbar buttons.
+      #
+      # #toolbar_cmds, not #cmds: all six are still built and still in the menu
+      # below, but the per-axis three do not get a button. See main.rb for why.
       tb.add_separator
-      PLUGIN.cmds.each_key { |behaviour_cmd| tb.add_item(behaviour_cmd) }
+      PLUGIN.toolbar_cmds.each { |behaviour_cmd| tb.add_item(behaviour_cmd) }
       UI.start_timer(0.1, false) { tb.restore }
 
       TRINH_VAN_PHUC.tools_command.add_item(cmd)

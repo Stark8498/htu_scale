@@ -248,6 +248,17 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
           if (tag === 'INPUT' || tag === 'TEXTAREA') { return; }
           e.preventDefault();
         });
+        // Same reason, other button: right-clicking the page brought up the
+        // browser's own menu -- Back, Forward, Print, View page source, DevTools.
+        // Not one of those means anything in a window with three controls, and
+        // "View page source" on what looks like a dialog reads as a leak. The
+        // entry field keeps its menu, where Cut/Copy/Paste is how a size list
+        // gets pasted in.
+        document.addEventListener('contextmenu', function (e) {
+          var tag = e.target && e.target.tagName;
+          if (tag === 'INPUT' || tag === 'TEXTAREA') { return; }
+          e.preventDefault();
+        });
         window.addEventListener('load', function () {
           sketchup.ready();
           document.getElementById('value').focus();

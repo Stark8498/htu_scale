@@ -30,13 +30,13 @@ utils  main  group_lock  tool  dim_favorites  dim_menu  dim_add_dialog  scale_to
 | File | Việc |
 |---|---|
 | `utils.rb` | `Settings` (bọc read/write_default), hình học khung bao, vẽ chữ, `create_box` |
-| `main.rb` | Chế độ khoá trục (`behavior_state` / `set_behavior` / `apply_behavior`), 7 `UI::Command`, `Typeface` |
+| `main.rb` | Chế độ khoá trục (`behavior_state` / `set_behavior` / `apply_behavior`), 6 `UI::Command`, `Typeface` |
 | `group_lock.rb` | `GroupLock` — nhánh khoá trục cho selection **nhiều vật**: nhóm tạm, mask, dọn |
 | `tool.rb` | Lớp cha `Tool`, 18 dòng |
 | `dim_favorites.rb` | Danh sách kích thước đã lưu — **chủ sở hữu duy nhất** của phần lưu trữ |
 | `dim_menu.rb` | Menu chuột phải trên một số đo |
 | `dim_add_dialog.rb` | Cửa sổ `Dimensions` (HtmlDialog, HTML nhúng thẳng trong file) |
-| `scale_tool.rb` | `ScalePPTool` — trái tim của plugin, 1370 dòng |
+| `scale_tool.rb` | `ScalePPTool` — trái tim của plugin, 1258 dòng |
 | `dims.rb` | `DimsUI` — dialog Vue cũ, vẫn nạp, `observer.rb` còn gọi tới |
 | `observer.rb` | App / Tools / Selection observer, tự gắn overlay vào mỗi model |
 | `overlay.rb` | `ScalePP2Overlay` — chuyển tiếp sự kiện và quyết định lúc nào push tool |
@@ -55,16 +55,20 @@ Plugin **không thay thế** Scale tool. Nó chạy song song:
   Scale tool gốc mới là tool đang chạy, và overlay gọi hộ `tool.draw` / `tool.onMouseMove`.
 - Khi tool cần **bắt cú click**, overlay `push_tool` nó lên stack ([overlay.rb:31](../htu_scaleplus/overlay.rb#L31)).
 
-Điều kiện push là `ScalePPTool#wants_push?` = `on_hover?` (con trỏ nằm trên chữ số đo)
-`|| own_click?` (con trỏ ra ngoài khung grip).
+Điều kiện push là `ScalePPTool#on_hover?` — con trỏ nằm **trên chữ số đo**, và chỉ thế.
 
 **Hệ quả phải nhớ:** `push_tool` làm SketchUp suspend Scale tool gốc → grip xanh của
 nó ngừng được vẽ. Mọi thứ nhìn bị "mất" khi rê chuột đều bắt nguồn từ đây. Overlay API
 không có callback nút chuột, nên không có cách nào bắt click mà không chiếm stack.
 
-`GRIP_MARGIN = 24`: trong khung bao trên màn hình cộng 24px thì cú click thuộc về
-Scale tool gốc (có thể là grip); ngoài vùng đó thì thuộc về plugin. Đây là ranh giới
-duy nhất chi phối toàn bộ phần retarget.
+Vì thế tool phải giữ stack **đúng bằng khoảng thời gian nó cần con chuột, không hơn một
+frame** — nhả ra ngay khi con trỏ rời nhãn, trừ lúc đang có trục bị khoá và người dùng
+đang gõ số (một cú lay chuột sẽ ném đi những gì vừa gõ). Chốt ở `dim_edit_test.rb` mục
+"holding the tool stack, and letting go".
+
+Từng có lý do thứ hai để chiếm stack — **retarget**, click sang vật khác là scale vật đó.
+Đã bỏ, xem §4. Cái nó để lại và **vẫn còn cần**: grip thay thế, vì lý do thứ nhất vẫn
+khiến grip gốc tắt mỗi lần con trỏ đậu lên một nhãn.
 
 ---
 
@@ -111,8 +115,37 @@ Text size >         Small / Medium / Large
 **Một danh sách chung cho cả ba trục**. Trục vẫn được truyền xuyên suốt vì chọn một
 kích thước thì phải áp vào đúng trục vừa bấm — chỉ chỗ *lưu* là chung.
 
-**Retarget** — đang scale vật A, click sang vật B là scale B luôn, click chỗ trống là
-bỏ chọn. `pick_object` chỉ nhận group/component chưa khoá.
+**HtmlDialog là một cái browser** — và nó hành xử đúng như browser ở hai chỗ không ai
+muốn. Ctrl+A bôi xanh cả trang: tiêu đề, nút, cả danh sách. Chuột phải mở menu của
+Chromium: Back, Forward, Print, **View page source**, DevTools. Cả hai đều bị huỷ bằng
+`preventDefault`, **trừ trong ô nhập** — ở đó Ctrl+A là chọn cái vừa gõ và chuột phải là
+cách dán một dãy `45, 200, 400` vào, cả hai đều đáng giữ. `user-select: none` một mình
+không đủ cho Ctrl+A: nó chỉ làm vùng chọn vô hình, phím vẫn coi như đã xử lý.
+
+Hai listener đó giờ chứa **cùng một dòng** `tag === 'INPUT'`, nên `html.include?(...)` sẽ
+xanh nhờ listener kia dù chính nó bị xoá. `dim_add_dialog_test.rb` có helper `listener(html,
+event)` cắt lấy thân của listener được gọi tên rồi mới đọc trong đó — mutation test xác nhận
+là cần: không có helper thì xoá miễn trừ INPUT khỏi `keydown` vẫn xanh hết.
+
+**Retarget và số đo khi hover — ĐÃ BỎ, cố ý, không phải chưa làm.** Người dùng chốt phạm vi
+nhánh này đúng bằng bốn thứ: bỏ pet toolbar, click số đo nhập lại, list kích thước, khoá
+trục xyz cho selection nhiều vật (+ phím tắt). Hai tính năng ngoài danh sách đó bị cắt.
+
+| đã bỏ | nó là gì | vì sao nó tốn nhiều hơn vẻ ngoài |
+|---|---|---|
+| **Retarget** | đang scale vật A, click sang vật B là scale B luôn; click chỗ trống là bỏ chọn | `GRIP_MARGIN`, `outside_grips?`, `own_click?`, `wants_push?`, `pick_object`, `retarget` — và nó là **lý do tool chiếm stack ở mọi nơi ngoài nhãn**, tức nguồn của chuỗi báo lỗi "nháy điểm", "grip inactive", "icon chuột" |
+| **Số đo khi hover** | rê chuột qua vật là hiện kích thước vật đó, không cần chọn | `update_hover`, `hover_pick`, `hover_target?`, `build_hover_dims`, `refresh_hover`, `clear_hover`, `draw_hover_bounds/dims/grips`, nút thứ 7, preference `hover_dim` |
+
+Cả hai **không có một dấu vết nào** trong bản gốc Scale++ 1.1.2 (`cd9395b`): 5 method của
+retarget và 4 định danh của hover đều đếm ra 0. Nên bỏ chúng là quay về đúng hình dạng gốc,
+không phải cắt vào thứ Curic từng có.
+
+Muốn xem lại chúng: nhánh **`scale-full`** (`2389ea0`) giữ nguyên trạng thái đầy đủ, kèm
+`hover_dims_test.rb` (47 check), `retarget_test.rb` và `dev/htu_hover_probe.rb`.
+
+Ba thứ **giữ lại** vì chúng không phải retarget/hover mà là sửa lỗi hoặc thuộc bản gốc:
+grip thay thế (`draw_scale_points` có trong bản gốc), Text size Small/Medium/Large (bản gốc
+có, chỉ sửa lỗi bị ghi đè mỗi lần khởi động), và grip sống qua orbit/pan.
 
 **Con trỏ — plugin KHÔNG chạm vào, cố ý.** Icon Scale (mũi tên kèm ô vuông có góc đỏ) là của
 SketchUp và nó **giữ nguyên**: người dùng nhìn nó để biết Scale++ đang bật.
@@ -141,138 +174,20 @@ Select/Move/Rotate không phải việc của plugin) và suốt lúc camera di 
 con trỏ riêng mang nghĩa riêng). Ai thắng do SketchUp quyết: native tool trả lời **sau** thì
 người ghi sau thắng. Con trỏ chỉ đo được bằng cách nhìn.
 
-**Số đo của vật đang trỏ tới (hover)** — đang bật Scale, rê chuột qua một vật là hiện
-kích thước của **vật đó**, không cần chọn. Nút `Toggle hover dimensions` (icon
-`snapping_length.png`), preference `hover_dim`, mặc định **bật**.
-
-Ba luật chi phối toàn bộ phần này:
-
-1. **Nhãn hover là read-only, và đó là thiết kế chứ không phải thiếu tính năng.**
-   `on_hover?` quét `@data_dims` và nó là thứ quyết định tool có chiếm stack không —
-   chiếm stack thì grip gốc tắt. Nhãn hover nằm ở `@hover_dims`, **mảng riêng**, ngoài
-   mọi đường quyết định click. Nhét chúng vào `@data_dims` là mất grip mỗi lần con trỏ
-   quét ngang một vật. Test `hover_dims_test.rb` chốt đúng chỗ này.
-2. **Vật đang trỏ được đo bằng đúng code đo vật đang chọn** — `compute_bounds_for` +
-   `compute_dimensions_lines(view, bb_data)` + `build_dim_data(view, dims, bb_data, opts)`.
-   Trước kia cả ba viết theo ivar `@bb` / `@bb_points` / `@tr_bb`; đã tham số hoá bằng
-   `bb_data`. **Không** được "tạm swap ivar rồi trả lại": `draw` chạy trên đúng những
-   ivar đó mỗi frame và sẽ vẽ sai khung suốt thời gian swap. Có test so hai đường đo:
-   hover vật X phải ra đúng số mà chọn X sẽ ra.
-3. **Đo là đắt, pick là rẻ.** `text_geometry` tessellate từng glyph, nên chỉ đo lại khi
-   *vật dưới con trỏ đổi* (`update_hover`) hoặc *camera đổi* (`refresh_hover`, gọi từ
-   `draw` vì camera đổi mà không có mouse event nào báo). Cùng một vật, rê bao nhiêu
-   pixel cũng không đo lại.
-
-Không đo: chỗ trống, vật đang được chọn (đã có số đo màu của riêng nó — hai nhãn trên một
-cạnh chỉ đánh nhau), group tạm của `GroupLock` (nó là scratch, sắp bị explode), lúc đang
-kéo grip (`@tool_state != 0`), lúc đang gõ số vào một trục đã khoá, và **suốt lúc camera
-đang di chuyển**.
-
-**`hover_pick` đo NHIỀU hơn `pick_object` cho phép click** — hai câu hỏi khác nhau, đừng
-gộp lại:
-
-| | `pick_object` (click / retarget) | `hover_pick` (nhãn) |
-|---|---|---|
-| group / component | nhận | nhận |
-| `Face` rời | **từ chối** | **nhận** |
-| `Edge` rời, chỗ trống, vật bị lock | từ chối | từ chối |
-
-Lý do nhận `Face`: model thật có những chi tiết vẽ bằng geometry thô nằm thẳng trong
-`model.entities`, và đó đúng là chỗ đọc kích thước bằng con trỏ có ích nhất. Đo một mặt thì
-vô hại; còn **click** vào nó mà thành vật đang scale thì không phải việc của cú click, nên
-`pick_object` giữ nguyên. Có test chốt đúng sự khác biệt này.
-
-Một `Face` phẳng ra **2 số đo**, không phải 3 — nó không có chiều thứ ba để mà đo.
-`all_connected` sẽ tìm ra chiều thứ ba, nhưng trên geometry hàn liền với thứ xung quanh nó
-sẽ báo kích thước của **cả khối hàn liền đó**, tệ hơn là thiếu một số. Đây là lựa chọn của
-người dùng khi được hỏi, không phải mặc định tôi tự đặt. Kèm theo: `draw_hover_grips` bỏ
-đường tâm dài 0 (trục mà mặt không có bề dày), nếu không thì hai khối grip nằm đè lên nhau.
-
-Cách tìm ra chuyện này đáng ghi lại: báo lỗi ban đầu là *"hover mặt gần không có số đo, mặt
-xa mới có"*. Sai hoàn toàn — probe in ra
-
-```
-raw: count=1 best=Face#41632 defn=NO -- bi bo qua
-raw: parent=Sketchup::Model
-```
-
-tức mặt "gần" là `Face` rời còn mấy vật "xa" là `Group:__38`, `Group:__39`. Gần/xa chỉ là
-trùng hợp: hai loại đối tượng khác nhau ở hai khoảng cách khác nhau. Hai màn hình chụp
-không thể phân biệt được điều đó.
-
-Về navigation: hover bị **xoá** khi `navigating?`, không phải đo lại từng frame. Pick đã
-lỗi thời ngay frame đầu của cú kéo, và `Overlay#navigation_finished` replay lại vị trí
-chuột ngay khi nhả nút nên nhãn tự về. `clear_hover` xoá luôn `@hover_mouse` — nó là
-guard "cùng vật, khỏi làm gì", để lại thì nhãn không về cho tới khi người dùng vẫy chuột.
-
-Vẽ: **giống hệt** số đo của vật đang chọn — cùng màu theo trục (đỏ/xanh lá/xanh dương),
-cùng nền trắng, cùng đường gióng, cùng 6 khối lập phương xám và đường tâm nét chấm. Một
-đường vẽ duy nhất: `draw_dimension(view, dim, editable)`, `editable = false` chỉ tắt ba
-thứ (editor tại chỗ, caret, viền đánh dấu nhãn đang hover/đang khoá).
-
-**Đây là chỗ tôi đã tự quyết sai một lần, ghi lại để không ai làm lại.** Bản đầu vẽ nhãn
-hover xám phẳng, chỉ 2D, không đường gióng, với lý luận "nhãn không click được thì không
-nên trông giống nhãn click được". Đo lại trên video tham chiếu
-(`bandicam 2026-08-09 22-02-46-420.mp4`, tách 10 fps): hành vi được yêu cầu vẽ vật đang
-trỏ **đầy đủ**, và bản xám đọc ra như một tính năng khác, kém hơn. Ba check trong
-`hover_dims_test.rb` chốt lại phần nhìn này. Lần thứ năm suy luận về mặt nhìn ở plugin này
-thua đo — xem §9.
-
-**Khung bao xanh: vẽ khi ĐANG có selection, không vẽ khi selection rỗng.** SketchUp
-pre-highlight vật dưới con trỏ bằng khung xanh **chỉ khi Scale tool chưa có gì được chọn**,
-tức lúc nó còn đang hỏi "scale cái nào". Có selection rồi thì nó không hỏi nữa và không vẽ
-gì cả.
-
-Đo hai chiều, cách nhau một tuần:
-
-| | bằng chứng | ai vẽ |
-|---|---|---|
-| selection **rỗng** | suốt đoạn hover trong video, status bar giữ nguyên *"Click the item or object you want to scale"* | **SketchUp** — vẽ thêm chỉ là đè lên khung nó đang vẽ |
-| selection **có vật** | người dùng báo *"không thấy highlight xanh khi hover đối tượng khác khi scale"*, kèm ảnh có grip và số đo | **không ai** → `draw_hover_bounds` |
-
-Retarget nằm đúng ở hàng thứ hai (click là chuyển scale sang vật đang trỏ), nên khung phải
-do plugin vẽ hoặc không có khung nào. Kết luận cũ ("không vẽ khung bao") **đúng phần điều
-kiện, sai phần phạm vi** — nó chỉ đo được hàng trên.
-
-`HOVER_BOUNDS = [0, 102, 255]`, `line_width = 2` — mảnh hơn khung vàng width 3 của vật đang
-scale, để hai thứ không đọc thành một: một cái là vật đang scale, cái kia là vật mà một cú
-click sẽ scale thay thế. Shim giờ ghi **cả độ dày** vào mỗi lời gọi draw, nếu không thì check
-chỉ nói được "có set độ dày nào đó" — câu luôn đúng dù sai thế nào.
-
-Grip của vật đang trỏ **không bao giờ tô xanh lá** (`GRIP_FILL`). Tô là cách plugin đóng
-thế cho grip thật đã ngừng được vẽ; vật đang trỏ thì SketchUp vẫn đang vẽ grip thật của
-nó, tô vào là vừa đè lên vừa nói dối rằng nó là vật đang scale. Mask lọc theo
-`mask_lines(lines, entity)` với entity là **vật đang trỏ**, không phải selection.
-
-`draw` gọi phần hover **trên** guard `@dims` (số đo của *selection*), vì `@dims` rỗng khi
-chưa chọn gì — mà đó đúng là lúc hover có ích nhất: bấm S rồi trỏ.
-
-**Hai lỗi đã sửa, cả hai đều làm nhãn hover biến mất và cả hai đều không phải lỗi của
-riêng phần hover:**
-
-1. `deactivate` bị SketchUp gọi cho **hai việc khác nhau**: người dùng rời Scale tool, và
-   tool bị pop khỏi stack sau khi nó tự push (xảy ra liên tục, mỗi lần con trỏ về vùng
-   grip thì `call_back` pop). `clear_hover` nằm chung một chỗ nên nhãn bị xoá **ngay trong
-   cùng mouse event vừa tính ra nó**. Phân biệt bằng `@on_push_tool`.
-2. `@dims` **sống lâu hơn** `@bb`: `deactivate` gọi `store_bounds_points` với selection
-   rỗng (→ `@bb = nil`) nhưng **không** tính lại `@dims`. Frame sau đi qua được guard
-   `@dims` rồi đưa một box nil cho `bound_points`, hỏi `#width` của nil. `draw` rescue và
-   `p(e)` in ra — nên triệu chứng là **Ruby Console đầy `undefined method 'width' for
-   nil:NilClass` theo tốc độ frame**, và mọi thứ dưới chỗ raise ngừng được vẽ. Guard nằm
-   trong `draw_selected_bounds` và `draw_scale_points` (chỗ test tới được), không phải
-   trong `draw`.
-
-Đường sự kiện: `update_hover` được gọi từ **cả hai** chỗ — `ScalePPTool#onMouseMove` và
-`Overlay#dispatch_mouse`. Không chỗ nào đủ một mình: khi tool nằm trên stack thì SketchUp
-tự gọi `onMouseMove` (overlay không được gọi lại, sẽ nhân đôi mọi event), khi tool ở ngoài
-stack thì chỉ overlay có event. Gọi hai lần vô hại vì `update_hover` return ngay khi chuột
-chưa đổi toạ độ.
-
-**Khoá trục** — 6 nút trên toolbar và trong menu `Plugins > HTU_ScalePlus`. Đặt
+**Khoá trục** — 6 lệnh, đều nằm trong menu `Plugins > HTU_ScalePlus`. Đặt
 `no_scale_mask` cho definition: all=0, xyz=120, x=126, y=125, z=123. Chế độ là
 **preference của máy**, `apply_behavior` áp nó vào mọi thứ được chọn sau đó — nên nó
 sống qua component, qua file, qua phiên. Nút không bao giờ bị xám, tick bám theo chế
 độ đã nhớ. Bấm lại nút đang bật = tắt về all.
+
+Trên **toolbar chỉ có 4 nút**: bật/tắt overlay, `Scale All`, `Scale XYZ`, số đo —
+`main.rb#toolbar_cmds` quyết định, không phải `#cmds`. Ba nút x/y/z riêng bị bỏ khỏi
+toolbar theo yêu cầu ("chỉ giữ các icon khoanh đỏ"): tám hình khối gần giống nhau
+xếp một hàng thì không phân biệt được bằng mắt. **Chúng vẫn ở trong menu** — đó là chỗ
+duy nhất `Preferences > Shortcuts` tìm thấy lệnh, mà phím tắt mới là điểm của ba lệnh
+đó. Muốn trả nút về: đổi `toolbar_cmds` trong `main.rb`, không sửa `loader.rb`.
+`runtime_test.rb` khoá cả hai chiều — thiếu một trong 4 nút là đỏ, và x/y/z **quay lại**
+toolbar cũng đỏ.
 
 **Bắt Scale tool đọc lại mask** — `PLUGIN.repick_scale_tool`. Đây là **một lỗi đã sửa**,
 và nó trả lời câu hỏi treo ở §8: `send_action("selectScaleTool:")` **không đủ**.
@@ -434,7 +349,8 @@ khoá, nên 3 đường lúc không khoá cũng nháy ở đúng cái mép đó.
 Khoá `[point]` một phần tử, và vòng vẽ bỏ qua `GL_LINES` khi `line.length < 2` — đưa OpenGL
 nửa đoạn thẳng thì nó vẽ ra thứ không ai đoán được.
 
-Gate: `retarget_test.rb` mục "the grips must not read as switched off", 5 check đọc số từ
+Gate: `grips_test.rb` (tách ra khi bỏ retarget — grip có trước tính năng đó và sống lâu hơn
+nó), 5 check đọc số từ
 `bb_data[:scale_points]` **và** từ số khối vẽ ra, nên lệch một bên là đỏ. Fixture cũ đưa tool
 một `BoundingBox` **rỗng** và `bb_data` chỉ có `:points`, tức mọi check ở đó đang đo nhánh
 fallback chứ không phải code chạy thật — đã đổi sang selection thật + `store_bounds_points`.
@@ -451,7 +367,8 @@ lại — nên 4 viền xám bị bỏ lại ở chỗ **không có grip nào**,
 dùng báo là *"chọn XYZ thì grip các trục bị inactive"*. Không mất gì khi im lặng: grip thật
 của SketchUp luôn đúng về việc grip nào tồn tại, còn bản copy này thì không.
 
-Grip của vật đang **hover** vẫn vẽ viền xám không tô — khác đường, khác lý do, xem §4.
+Chỉ còn **một** đường vẽ grip. Trước đây có hai: đường này, và grip xám không tô của vật
+đang hover. Đường thứ hai đi cùng tính năng hover, xem §4.
 
 ---
 
@@ -471,7 +388,7 @@ attribute này, nghĩa là một trong hai chỗ đó đã hỏng.
 | `HTU ScalePlus` | `dim_text_size` | 0 / 1 / 2 |
 | `HTU ScalePlus` | `dim_offset` | 20 |
 | `HTU ScalePlus` | `show_dim` | true/false — số đo của vật đang **chọn** |
-| `HTU ScalePlus` | `hover_dim` | true/false — số đo của vật đang **trỏ tới**, default true |
+| ~~`HTU ScalePlus`~~ | ~~`hover_dim`~~ | không còn đọc/ghi — tính năng đã bỏ, xem §4. Giá trị cũ có thể còn trong registry của người dùng, vô hại |
 | `htu_behavior` | `state` | 0 / 120 / 126 / 125 / 123 |
 
 Lưu bằng inch để danh sách nhập trong file mm vẫn đọc đúng ở file inch.
@@ -509,11 +426,10 @@ bản này được dựng lại từ đó — không phải version của plugi
 | dim menu | `test/dim_menu_test.rb` |
 | dim edit | `test/dim_edit_test.rb` |
 | add dialog | `test/dim_add_dialog_test.rb` |
-| retarget | `test/retarget_test.rb` |
+| grips | `test/grips_test.rb` |
 | behavior | `test/behavior_test.rb` |
 | group lock | `test/group_lock_test.rb` |
 | navigation | `test/navigation_test.rb` |
-| hover dims | `test/hover_dims_test.rb` |
 | text size | `test/text_size_persistence_test.rb` |
 | reload tool | `test/reload_tool_test.rb` — dev tooling, xem §7 |
 
@@ -577,8 +493,9 @@ Những chỗ đã phải sửa vì lý do đó:
 Nguyên tắc: nếu một lỗi thật lọt qua được shim, sửa shim trước, rồi mới viết test.
 
 Bốn gạch đầu dòng cuối cùng cùng một chuyện: shim **rescue-được** thì code hỏng vẫn
-xanh. Cách phát hiện là viết một check "positive control" — `hover_dims_test.rb` mở đầu
-bằng "the shim itself can measure a box, or nothing below means anything" — rồi
+xanh. Cách phát hiện là viết một check "positive control" — kiểu "the shim itself can measure
+a box, or nothing below means anything", hoặc "the shim would notice a cursor being set, or
+this proves nothing" trong `navigation_test.rb` — rồi
 **mutation test**: sửa hỏng code thật một chỗ, chạy gate, xem có đúng một check đỏ. Đã
 làm với 3 chỗ (loại vật đang chọn, cache theo pixel, guard navigation), mỗi lần đúng một
 check đỏ.
@@ -651,33 +568,23 @@ là binary, nên test phải dùng `binread`/`binwrite`.
 Đường dẫn bản cài:
 `%APPDATA%\SketchUp\SketchUp 2026\SketchUp\Plugins\htu_scaleplus\`
 
-Hai probe, cùng một khuôn (`prepend`, sống qua reload):
+Probe (`prepend`, sống qua reload):
 
 ```ruby
 load "E:/htu_scaleplus/dev/htu_nav_probe.rb"     # orbit/pan/zoom: grip, viền, đếm draw
-load "E:/htu_scaleplus/dev/htu_hover_probe.rb"   # hover: LÝ DO không có nhãn
 ```
 
-`htu_hover_probe` có một thứ đáng nhớ ngoài phần hover: nó **override `p`** trên
-`ScalePPTool`. Plugin nuốt lỗi bằng `p(e)`, in ra đúng một dòng `#<NoMethodError: ...>`
-không có method, không có số dòng, không biết từ rescue nào trong cả chục cái. `p` là
-private method của Kernel gọi trên chính tool, nên module prepend chiếm được nó và in kèm
-backtrace. Mọi rescue trong `ScalePPTool` — kể cả trong `draw` — đi qua đó. Dùng lại chiêu
-này cho bất kỳ lỗi nào chỉ hiện ra dưới dạng một dòng `#<...>` trong Ruby Console.
+`dev/htu_hover_probe.rb` đã **xoá cùng tính năng hover**. Nó có một chiêu đáng nhớ, và nếu
+cần lại thì lấy ở nhánh `scale-full`: nó **override `p`** trên `ScalePPTool`. Plugin nuốt lỗi
+bằng `p(e)`, in ra đúng một dòng `#<NoMethodError: ...>` — không method, không số dòng, không
+biết từ rescue nào trong cả chục cái. `p` là private method của Kernel gọi trên chính tool,
+nên một module prepend chiếm được nó và in kèm backtrace. Mọi rescue trong `ScalePPTool` —
+kể cả trong `draw` — đi qua đó. Dùng lại chiêu này cho bất kỳ lỗi nào chỉ hiện ra dưới dạng
+một dòng `#<...>` trong Ruby Console.
 
-`HTU_HoverProbe.stats` trả lời câu "không in dòng nào nghĩa là gì": đường hover **chưa hề
-chạy** (tool không active nên không ai gọi vào), khác hẳn với chạy rồi nhưng quyết định
-giống nhau mọi lần (chỉ in một dòng).
-
-`HTU_HoverProbe.grips` in cả chuỗi quyết định về grip trong một lần: `behavior_state`, mask
-của từng vật đang chọn (hoặc "KHONG co definition"), độ dài từng trục kèm cờ suy biến,
-`mask_lines giu N/3`, có đang vẽ grip thay thế hay không. Nó là cái phủ định giả thuyết
-"geometry thô" của tôi trong hai dòng (`mask=125`, `giu 1/3 truc`) và đẩy vụ án sang
-reloader. Dùng nó trước khi sửa bất cứ gì về grip.
-
-**Trước khi nghi plugin, kiểm bản đang nạp.** Lỗi nào có mùi "code đúng mà chạy sai" thì
-đọc dòng MD5 của `run` và tìm chữ `KHAC repo!` trước tiên. Cả một ngày đã mất vì bỏ qua
-bước đó.
+Probe đó cũng từng có `.grips` (mask từng vật, trục suy biến, `mask_lines giu N/3`), `.dims`
+(nhãn nào thiếu và vì sao) và `.dc` (công thức Dynamic Component nào vỡ). Cả ba vẫn hữu ích
+cho phần khoá trục — ở `scale-full`, không phải viết lại.
 
 ---
 
@@ -689,7 +596,8 @@ bước đó.
 |---|---|---|
 | `original-curic-scale-pp-1.1.2` | `523a22d`, **root commit riêng, không parent** | Curic Scale++ 1.1.2 **y nguyên bản ship**, 157 file từ `curic_scale++.rbz` (md5 `1f11ebe7…`). Cài được, **đọc không được**: cả 29 file `.rb` là payload RubyEncoder v3.0.1 nạp qua `rgloader/`. Source đọc được ở các nhánh khác là đã giải mã từ đây |
 | `main` | `cd9395b` | source đã giải mã, đổi tên HTU ScalePlus, bỏ license check — **chưa có custom chức năng nào**. Đây là mốc lùi để *đọc và làm lại*, khác với mốc trên là để *cài lại* |
-| `scale-group-lock-and-navigation` | `2d0b397` | nhánh làm việc, 6 commit |
+| `scale-group-lock-and-navigation` | **nhánh làm việc** | Phạm vi đã chốt: **đúng 4 chức năng** — bỏ pet toolbar, click số đo nhập lại, list kích thước, khoá trục xyz nhiều vật (+ phím tắt). Retarget và hover dimensions đã cắt |
+| `scale-full` | `2389ea0` | Trạng thái **đầy đủ** trước khi cắt: có retarget, hover dimensions, `hover_dims_test.rb`, `retarget_test.rb`, `dev/htu_hover_probe.rb`. Giữ để lấy lại code, không phải để ship |
 
 Đóng gói lại bản gốc mà không cần checkout:
 
@@ -701,16 +609,15 @@ Nhánh gốc **không có parent** là cố ý: nó không phái sinh từ gì t
 `cd9395b` đã là bản giải mã + đổi tên. Diff vẫn được:
 `git diff original-curic-scale-pp-1.1.2 main`.
 
-**Đã commit, chưa push.** Branch `scale-group-lock-and-navigation`, 6 commit trên
-`cd9395b`, kết thúc ở `2d0b397`. `main` vẫn ở `cd9395b`. Remote là
+**Chưa push.** `main` vẫn ở `cd9395b`. Remote là
 `origin https://github.com/Stark8498/htu_scale.git` — **chưa push, cố ý**: đẩy lên repo
 public là việc ra ngoài, để người dùng quyết. `dist/` nằm trong `.gitignore` (nửa MB
 binary tái tạo được bằng `ruby build.rb`). Version đã lên **1.2**.
 
-`2d0b397` gom cả đợt 2026-08-12: hover dimensions, con trỏ, Ctrl+A, fix khoá trục lần đầu,
-grip all-or-nothing, guard nhãn z, và bản reloader tự sync. Handoff riêng của đợt đó —
-báo lỗi nào dẫn tới sửa gì, cái gì chưa kiểm trong SketchUp thật — ở
-[HANDOFF-2026-08-12.md](HANDOFF-2026-08-12.md).
+Handoff riêng của đợt 2026-08-12 — báo lỗi nào dẫn tới sửa gì, cái gì chưa kiểm trong
+SketchUp thật — ở [HANDOFF-2026-08-12.md](HANDOFF-2026-08-12.md). Đọc nó cùng với §4: một
+phần việc trong đó (hover dimensions) đã bị cắt sau khi phạm vi được chốt lại, còn phần sửa
+lỗi thì giữ.
 
 **Grip lúc orbit / pan: ĐÃ XONG, người dùng xác nhận trên SU 2026.** Cả grip xanh lẫn viền
 vàng đều còn nguyên khi orbit và khi pan. Giữ nguyên phần dưới vì nó là hồ sơ cách tìm ra,
@@ -819,23 +726,6 @@ class TN < Sketchup::ToolsObserver
 end
 Sketchup.active_model.tools.add_observer(TN.new)
 ```
-
-**Hover dimensions chưa chạy thử trong SketchUp thật.** 35 check xanh trên shim, nhưng
-hai điều chỉ SketchUp trả lời được, và cả hai đều là thứ shim *không thể* trả lời:
-
-1. **Giá thật của việc đo.** Shim không tessellate glyph thật (`Geom.tesselate` là fan
-   đơn giản, `Transformation#transform` là identity). Trong SU thật, mỗi lần đổi vật dưới
-   con trỏ là ba nhãn được dựng lại từ đầu. Cache đã chốt bằng test (cùng vật, rê bao
-   nhiêu pixel cũng không đo lại), nhưng "rê nhanh qua 20 group trong một model nặng" thì
-   chưa ai đo. Nếu thấy giật: nơi cần đo là `build_hover_dims`, và cách rẻ nhất là
-   debounce bằng `UI.start_timer` chứ không phải bỏ cache.
-2. **Có bị lẫn với số đo của vật đang chọn không.** Đã tách bằng màu xám phẳng, chỉ 2D,
-   không extension line — nhưng đó là suy luận về mặt nhìn, và §9 cho thấy suy luận về mặt
-   nhìn ở plugin này sai bốn lần. Cách đo: video capture, xem mục ffmpeg ở trên.
-
-Giới hạn đã biết, cố ý: chỉ group/component top-level và `Face` rời được đo — không đo
-`Edge` (một số đo không đáng cái nhãn), và một mặt phẳng ra 2 số chứ không phải 3. Xem bảng
-`hover_pick` vs `pick_object` ở §4.
 
 **`GroupLock` chưa chạy thử trong SketchUp thật.** 13 gate xanh trên shim, nhưng ba điều
 chỉ SketchUp trả lời được: (1) group tạm mask 120 có thật sự ra đúng 6 grip khi trước đó

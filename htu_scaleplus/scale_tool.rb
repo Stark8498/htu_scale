@@ -96,17 +96,10 @@ end
       # treated alike: the user leaving the Scale tool, and this tool being popped
       # off the stack after its own push. The second happens constantly -- every
       # time the cursor comes back over the grips, #call_back pops it.
-      pushed = @on_push_tool
       if @on_push_tool
         @on_push_tool = false
       end
       unlock_axis
-      # So only on a real departure. Clearing on a pop wiped the hover labels on
-      # the same mouse event that had just computed them, every time the cursor
-      # crossed back into the selection's padded box.
-      unless pushed
-        clear_hover(view)
-      end
       @selected = []
       store_bounds_points
     end
@@ -186,324 +179,6 @@ end
   d && d[:hover]
 end
     end
-    # Padding around the selection's screen box, in pixels. SketchUp's scale
-    # grips all sit ON that box, and they stick out past the silhouette.
-    GRIP_MARGIN = 24
-    # Splits the viewport in two, and everything about retargeting follows from
-    # it: inside the padded box the click may be a grip, so it belongs to the
-    # Scale tool and this tool must stay off the stack. Outside it there is no
-    # grip to hit, so the click is safely ours to read as "scale that one
-    # instead" or "deselect".
-    #
-    # A screen-space box beats testing each grip position: SketchUp decides
-    # where its grips go, and the box is the one thing guaranteed to contain
-    # them however it decides.
-    def outside_grips?(x, y, view)
-      points = @bb_data && @bb_data[:points]
-      unless points && !points.empty? && view
-        return true
-      end
-      xs = []
-      ys = []
-      points.each do |pt|
-        sp = view.screen_coords(pt)
-        xs << sp.x
-        ys << sp.y
-      end
-      x < xs.min - GRIP_MARGIN || x > xs.max + GRIP_MARGIN ||
-        y < ys.min - GRIP_MARGIN || y > ys.max + GRIP_MARGIN
-    end
-    # Whether this tool wants the next click. Only in state 0: mid-drag the
-    # Scale tool owns the mouse wherever it goes.
-    def own_click?
-      !!@own_click
-    end
-    def wants_push?
-      on_hover? || own_click?
-    end
-    # The top-level group or instance under the cursor, or nil over raw
-    # geometry and empty space. Only these can be scaled as a unit, which is
-    # what the whole plugin is about.
-    def pick_object(x, y, view)
-      helper = view.pick_helper
-      helper.do_pick(x, y)
-      entity = helper.best_picked
-      unless entity.respond_to?(:definition)
-        return
-      end
-      if entity.respond_to?(:locked?) && entity.locked?
-        return
-      end
-      entity
-    rescue StandardError => e
-      p(e)
-      nil
-    end
-    # Click outside the grips: switch the scale straight to whatever was
-    # clicked, or drop the selection on empty space and wait for the next one.
-    # Saves leaving the tool, selecting, and pressing S again for every object.
-    def retarget(x, y, view)
-      entity = pick_object(x, y, view)
-      selection = @model.selection
-      if entity.nil?
-        if selection.empty?
-          return
-        end
-        selection.clear
-      elsif selection.length == 1 && selection.to_a.first == entity
-        # A click on what is already being scaled changes nothing.
-        return
-      else
-        selection.clear
-        selection.add(entity)
-      end
-      redraw(view)
-      view.invalidate
-      entity
-    end
-    # ---- dimensions of whatever the cursor is over ------------------------
-    #
-    # Read-only labels on the object under the cursor, so a size can be checked
-    # without selecting anything and pressing S again.
-    #
-    # Deliberately NOT put into @data_dims. That array is what #on_hover? scans,
-    # and #on_hover? is what makes this tool take the tool stack -- so a hover
-    # label in there would suspend SketchUp's Scale tool, and its grips, every
-    # time the cursor drifted across an object. These labels can be read and
-    # nothing else: no axis lock, no context menu, no click target.
-    #
-    # Note the two senses of "hover" in this file, which are unrelated:
-    # #hovered_dim below is the cursor over a dimension's own text, which IS
-    # interactive. This is the cursor over an object.
-    #
-    # They are drawn EXACTLY like the selected object's dimensions -- same axis
-    # colours, same white label boxes, same witness lines, same grey grip cubes
-    # and dotted centre lines -- and that was not the first attempt. The first
-    # version painted them flat grey, in 2D, with no witness lines, on the
-    # reasoning that a label which cannot be clicked should not look like one that
-    # can. Measured against the reference capture, that reasoning was simply wrong:
-    # the behaviour being asked for shows the hovered object in full, and the
-    # muted version reads as a different, lesser feature.
-    #
-    # Nothing draws a bounding box here either, and that is also measured. With
-    # nothing selected, SketchUp's own Scale tool already outlines the object under
-    # the cursor in blue -- the status bar stays on "Click the item or object you
-    # want to scale" throughout, so no selection is involved. Drawing another box
-    # would only sit on top of a box SketchUp is already drawing.
-    attr_reader(:hover_object, :hover_dims)
-    def update_hover(x, y, view)
-      unless PLUGIN.show_hover_dim?
-        return clear_hover(view)
-      end
-      unless active?
-        return clear_hover(view)
-      end
-      # Mid-drag, and mid-typing into a locked dimension, the user is busy with
-      # the selection; a second set of numbers appearing then is noise.
-      if @tool_state != 0 || @locked_axis
-        return clear_hover(view)
-      end
-      if PLUGIN.navigating?
-        return clear_hover(view)
-      end
-      # Every pixel of movement arrives here. The pick is cheap, measuring is
-      # not -- text_geometry tessellates every glyph -- so nothing is rebuilt
-      # while the cursor stays on the same object.
-      if @hover_mouse == [x, y]
-        return
-      end
-      @hover_mouse = [x, y]
-      entity = hover_pick(x, y, view)
-      if entity && !hover_target?(entity)
-        entity = nil
-      end
-      # == rather than equal?. SketchUp usually hands back the same Ruby object
-      # for the same entity, but nothing promises it, and a fresh wrapper for the
-      # object already being measured would rebuild every label on every mouse
-      # move -- the one cost this guard exists to avoid. Entity#== compares the
-      # entity underneath, and nil == nil covers "empty space, still empty".
-      if entity == @hover_object
-        return
-      end
-      @hover_object = entity
-      @hover_dims = entity && build_hover_dims(view, entity)
-      @hover_camera = entity && store_camera(view)
-      view.invalidate
-      nil
-    rescue StandardError => e
-      p(e)
-      @hover_object = nil
-      @hover_dims = nil
-      nil
-    end
-    # What the hover labels may measure, which is deliberately MORE than what a
-    # click may retarget to.
-    #
-    # #pick_object answers a different question -- what can be scaled as a unit --
-    # and it must keep refusing loose geometry, because clicking a face and having
-    # it become the scale target is not what the click is for. Measuring one is
-    # harmless, and a model where the parts are drawn as loose faces rather than
-    # groups is exactly where reading a size off the cursor is most wanted. So a
-    # Face is accepted here and nowhere else.
-    #
-    # The face only, not the panel it belongs to: #all_connected would give the
-    # third dimension too, but on geometry welded to its neighbours it would report
-    # the size of everything it is welded to, which is worse than a missing number.
-    # A flat face therefore gets two dimensions -- there is no third to give.
-    def hover_pick(x, y, view)
-      entity = pick_object(x, y, view)
-      if entity
-        return entity
-      end
-      # #pick_object has already run the pick, so this reads the same result.
-      raw = view.pick_helper.best_picked
-      unless raw.is_a?(Sketchup::Face)
-        return nil
-      end
-      if raw.respond_to?(:locked?) && raw.locked?
-        return nil
-      end
-      raw
-    rescue StandardError => e
-      p(e)
-      nil
-    end
-    def hover_target?(entity)
-      # The wrapper group the multi-object lock puts around the selection is not
-      # an object the user chose -- labelling it would put numbers on a scratch
-      # group that is about to be exploded again.
-      if GroupLock.temp?(entity)
-        return false
-      end
-      # What is already selected has its own dimensions drawn, in colour and
-      # clickable. Two labels on one edge would only fight.
-      !Sketchup.active_model.selection.to_a.include?(entity)
-    end
-    # No :color and no :extensions override: the defaults are the per-axis colours
-    # and the witness lines, which is the whole point -- one drawing path, so the
-    # hovered object cannot come out looking like a different feature than the
-    # selected one.
-    def build_hover_dims(view, entity)
-      bb_data = compute_bounds_for([entity])
-      points = bb_data[:points]
-      unless points && !points.empty?
-        return nil
-      end
-      dims = compute_dimensions_lines(view, bb_data)
-      unless dims && !dims.empty?
-        return nil
-      end
-      @hover_bb_data = bb_data
-      build_dim_data(view, dims, bb_data)
-    end
-    # Called from #draw, because a camera move changes where the labels belong
-    # without any mouse event arriving to say so.
-    def refresh_hover(view)
-      unless @hover_object
-        return
-      end
-      if PLUGIN.navigating?
-        # Cleared rather than re-measured on every frame of the gesture: the pick
-        # is stale the moment the camera starts moving, and Overlay#navigation_finished
-        # replays the cursor position as soon as the button comes up, which puts
-        # the labels back where they belong.
-        return clear_hover(view)
-      end
-      unless @hover_object.valid?
-        return clear_hover(view)
-      end
-      cam = store_camera(view)
-      if @hover_camera == cam
-        return
-      end
-      @hover_camera = cam
-      @hover_dims = build_hover_dims(view, @hover_object)
-    end
-    # @hover_mouse is cleared too, and that is the point: it is the "same object,
-    # nothing to do" guard, and leaving it set would keep the labels away until
-    # the cursor happened to move again.
-    def clear_hover(view = nil)
-      @hover_mouse = nil
-      unless @hover_object || @hover_dims
-        return false
-      end
-      @hover_object = nil
-      @hover_dims = nil
-      @hover_bb_data = nil
-      @hover_camera = nil
-      view ||= @view
-      if view
-        view.invalidate
-      end
-      true
-    end
-    def draw_hover_dims(view)
-      dims = @hover_dims
-      unless dims && !dims.empty?
-        return
-      end
-      dims.each do |dim|
-        unless dim
-          next
-        end
-        # editable false: no in-place editor, no hover outline on the label. Every
-        # other pixel is drawn by the same code as the selection's dimensions.
-        draw_dimension(view, dim, false)
-      end
-    end
-    # SketchUp's pre-highlight blue, for the box around the object under the cursor.
-    HOVER_BOUNDS = [0, 102, 255].freeze
-    # SketchUp pre-highlights the object under the cursor in blue -- but only while the
-    # Scale tool has NOTHING selected, i.e. while it is still asking which object to
-    # scale. With a selection live it is not asking any more and draws no box at all.
-    #
-    # Measured in both directions, a week apart. In the reference capture the status bar
-    # read "Click the item or object you want to scale" for the whole time the blue box
-    # was showing, which is what says the selection was empty and the box was
-    # SketchUp's. Then, with an object selected and being scaled, the user reported no
-    # box when hovering another one.
-    #
-    # Retargeting is exactly that second case -- a click switches the scale to the
-    # hovered object -- so with a selection live the box has to be drawn here or there
-    # is none. The empty-selection case stays SketchUp's: drawing then would put a
-    # second box on top of the one it is already drawing.
-    def draw_hover_bounds(view)
-      bb_data = @hover_bb_data
-      unless @hover_object && bb_data && bb_data[:lines]
-        return
-      end
-      if view.model.selection.empty?
-        return
-      end
-      view.line_stipple = ""
-      view.drawing_color = HOVER_BOUNDS
-      # Thinner than the selection's own yellow box (width 3), so the two never read as
-      # the same thing: one is what is being scaled, the other is what a click would
-      # scale instead.
-      view.line_width = 2
-      view.draw(GL_LINES, hack_point_draw(view, bb_data[:lines].flatten))
-    end
-    # The grey grip cubes and dotted centre lines on the hovered object, the same
-    # ones the selection gets. Never filled green: the fill is this plugin standing
-    # in for a real grip that has stopped being drawn, and the hovered object has no
-    # real grips to stand in for -- SketchUp draws its own on the object it is
-    # pre-highlighting.
-    def draw_hover_grips(view)
-      bb_data = @hover_bb_data
-      unless bb_data && bb_data[:bounds]
-        return
-      end
-      lines = mask_lines(bounds_center_lines(bb_data[:bounds], bb_data[:tr]), @hover_object)
-      # A flat box -- a hovered face -- has a zero-length centre line on the axis it
-      # has no thickness in. Drawing it stacks two grip cubes in the same place and
-      # adds a dotted line of no length. Filtered here rather than in
-      # #draw_grip_boxes: the selection path has drawn those since long before this,
-      # and changing what it draws is a separate decision from what hover draws.
-      lines = lines.reject do |line|
-  !line[0].vector_to(line[1]).valid?
-end
-      draw_grip_boxes(view, lines, bb_data[:center], false)
-    end
     def hovered_dim
       unless @data_dims
         return
@@ -535,11 +210,6 @@ end
       unless active?
         return
       end
-      # Also called from Overlay#dispatch_mouse, which is the path that runs while
-      # SketchUp's own Scale tool is active and this one is off the stack. Both
-      # call it because neither covers both cases, and #update_hover returns at
-      # once when the cursor has not moved, so calling twice costs nothing.
-      update_hover(x, y, view)
       if @tool_state == 0 && @data_dims
         @data_dims.each do |dim|
           unless dim
@@ -552,12 +222,10 @@ end
           end
         end
       end
-      @own_click = @tool_state == 0 && outside_grips?(x, y, view)
       # While an axis is locked the tool must survive the cursor leaving the
       # dimension text, otherwise a nudge of the mouse would discard whatever
-      # the user has typed into the VCB. Away from the grips it stays on the
-      # stack too, so the next click can retarget instead of being swallowed.
-      if @on_push_tool && !on_hover? && !@locked_axis && !own_click?
+      # the user has typed into the VCB.
+      if @on_push_tool && !on_hover? && !@locked_axis
         return call_back
       end
       unless bounds_changed?
@@ -572,17 +240,17 @@ end
       @model.tools.pop_tool
     end
     # Clicking a dimension locks its axis and hands the VCB over, replacing the
-    # old modal "Resize Entity" inputbox. Clicking anywhere else releases.
+    # old modal "Resize Entity" inputbox. A click anywhere else releases the lock
+    # and hands the stack straight back, so the click lands on SketchUp's own Scale
+    # tool -- this tool is only ever on the stack because the cursor was over a
+    # label, and off a label it has no business with the mouse.
     def onLButtonDown(flags, x, y, view)
       dim = hovered_dim
       if dim
         return lock_axis(dim_axis(dim), dim)
       end
       unlock_axis
-      # No pop here any more. After retargeting, the cursor is over the new
-      # selection, and the next mouse move pops this tool so the Scale tool
-      # gets its grips back. Popping now would just make that a round trip.
-      retarget(x, y, view)
+      call_back
     end
     def lock_axis(axis, dim = nil)
       unless axis
@@ -1042,18 +710,18 @@ end
     end
     # Text, boxes and witness lines for one set of dimension lines.
     #
-    # opts[:color] paints them all one colour instead of the per-axis
-    # red/green/blue, and opts[:extensions] can drop the witness lines. Both are
-    # there for the hover labels: they have to read as something being shown,
-    # not as the three numbers the user can click and retype.
-    def build_dim_data(view, dims, bb_data, opts = {})
+    # bb_data is a parameter rather than read off @bb_data so a second box could be
+    # measured without swapping the ivars #draw runs on every frame. Only the
+    # selection's box is measured now, but the parameter stays: the swap-and-restore
+    # it replaced is the kind of thing that draws the wrong box for as long as it
+    # lasts, and there is nothing to gain by inviting it back.
+    def build_dim_data(view, dims, bb_data)
       center = bb_data[:center]
       point = dims.map(&:first).flatten.find do |pt|
   point_inside_screen?(view, pt)
 end
       point ||= center
       dim_offset = view.pixels_to_model(20, point)
-      extensions = opts.key?(:extensions) ? opts[:extensions] : true
       data = dims.map do |ar|
   unless ar
     next
@@ -1065,13 +733,13 @@ end
   unless vector_offset.valid?
     next
   end
-  parse_dimemsion_geometry(view, line, vector_offset, extensions, dim_offset, bb_data)
+  parse_dimemsion_geometry(view, line, vector_offset, true, dim_offset, bb_data)
 end
       data.each do |d|
         unless d
           next
         end
-        d[:color] = opts[:color] || axis_color(d[:line], bb_data[:tr])
+        d[:color] = axis_color(d[:line], bb_data[:tr])
       end
       data
     end
@@ -1235,15 +903,6 @@ end
         unless active?
           return
         end
-        # Above the @dims guard on purpose. @dims is the SELECTION's dimensions,
-        # and it is empty whenever nothing is selected -- which is exactly when
-        # hovering to read a size is most useful: press S, then point at things.
-        if PLUGIN.show_hover_dim?
-          refresh_hover(view)
-          draw_hover_bounds(view)
-          draw_hover_dims(view)
-          draw_hover_grips(view)
-        end
         unless @dims && !@dims.empty?
           return
         end
@@ -1339,9 +998,9 @@ end
       lines = mask_lines(bounds_center_lines(@bb, @tr_bb), entity)
       # With an axis lock the six centre-line grips ARE what SketchUp shows, so the
       # copy is faithful and the dotted axis lines belong. With no lock SketchUp shows
-      # all 26 and drawing six instead made the grips visibly change in number the
-      # moment the cursor crossed GRIP_MARGIN -- reported as "the points blink when I
-      # move the mouse near the object". No axis lines in that case either: SketchUp
+      # all 26, and drawing six instead made the grips visibly change in number every
+      # time this tool took or gave back the stack -- reported as "the points blink
+      # when I move the mouse near the object". No axis lines either: SketchUp
       # draws none, so drawing three would blink in and out the same way.
       if axis_locked?(entity)
         draw_grip_boxes(view, lines, @bb_center, true)
@@ -1437,14 +1096,13 @@ end
       # ever burying a real grip, including the colour it turns under the cursor.
       #
       # `fill` is decided by the caller now: the selection's grips fill when there
-      # is no real grip underneath, the hovered object's never do.
+      # is no real grip underneath to bury.
       #
       # This used to draw only the six centre-line grips whatever the mask said, and
       # noted it as a known limit: with no lock SketchUp shows 26 and the other 20 were
-      # absent for as long as this tool held the stack. That is not a cosmetic gap --
-      # the cursor crosses GRIP_MARGIN constantly while approaching the object, and
-      # every crossing swapped 26 grips for 6. #draw_scale_points now passes the set
-      # the mask actually calls for.
+      # absent for as long as this tool held the stack. Not a cosmetic gap -- the swap
+      # is visible as a blink every time the stack changes hands.
+      # #draw_scale_points now passes the set the mask actually calls for.
       box_lines.each do |line, box2ds|
         view.line_stipple = ""
         box2ds.each do |box2d|
