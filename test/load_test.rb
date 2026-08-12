@@ -68,19 +68,36 @@ checks = {
   "ScalePP2Overlay defined"  => TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:ScalePP2Overlay),
   "ScalePPTool defined"      => TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:ScalePPTool),
   "DimsUI.show_dialog"       => TRINH_VAN_PHUC::HTU_ScalePlus::DimsUI.respond_to?(:show_dialog),
-  "Update.check"             => TRINH_VAN_PHUC::HTU_ScalePlus::Update.respond_to?(:check),
   "DimFavorites.parse"       => TRINH_VAN_PHUC::HTU_ScalePlus::DimFavorites.respond_to?(:parse),
   "DimMenu.build"            => TRINH_VAN_PHUC::HTU_ScalePlus::DimMenu.respond_to?(:build),
   # The pet toolbar and the radial menu that drew it are no longer loaded.
   "PetToolbar gone"          => !TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:PetToolbar),
   "RadialMenu not loaded"    => !TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:RadialMenu),
+  # The self-updater is gone, not merely uncalled. Its two callers were removed
+  # first and it sat there for a while afterwards: ~270 lines that still shipped,
+  # still loaded, and could still have fetched and installed a file from the
+  # original vendor's server if anything had ever reached them.
+  "Update gone"              => !TRINH_VAN_PHUC::HTU_ScalePlus.const_defined?(:Update),
 }
+
+# Comments naming the vendor are wanted -- they say what was taken out and why.
+# Live code that can reach it is not.
+vendor = Dir[File.join(ROOT, "htu_scaleplus/**/*.rb")].flat_map do |file|
+  File.readlines(file).each_with_index
+      .reject { |line, _| line.strip.start_with?("#") || line.strip.empty? }
+      .select { |line, _| line.downcase.include?("curic") }
+      .map { |line, i| "#{File.basename(file)}:#{i + 1} #{line.strip[0, 60]}" }
+end
+checks["no live code reaches curic.io"] = vendor.empty?
+checks["curic_icon.png not shipped"] =
+  !File.exist?(File.join(ROOT, "htu_scaleplus/Resources/curic_icon.png"))
 
 fails = 0
 checks.each do |label, ok|
-  puts format("  %-28s %s", label, ok ? "OK" : "MISSING")
+  puts format("  %-32s %s", label, ok ? "OK" : "MISSING")
   fails += 1 unless ok
 end
+vendor.each { |line| puts "    still there: #{line}" }
 
 section "resource files referenced by the loaded code"
 res = [
