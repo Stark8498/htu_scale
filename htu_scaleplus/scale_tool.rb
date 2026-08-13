@@ -411,6 +411,19 @@ end
         point = line[0].project_to_line([@bb_center, vec])
         tr = Geom::Transformation.scaling(point, scale_x, scale_y, scale_z)
         @model.active_entities.transform_entities(tr, @model.selection.to_a)
+        # The branch above has saved the size to the list since Curic Scale++, which
+        # is where "type a size and it joins the saved list" already comes from. This
+        # branch did not, so the same keystrokes did or did not fill the list
+        # depending on how many objects happened to be selected. The size typed
+        # against a multi-object bounding box is still a size this workshop works
+        # to, and the list is machine-wide, not a property of the one object -- so
+        # there is nothing about a group selection that makes it belong less.
+        #
+        # nil object: no single definition to read a legacy attribute off, and
+        # DimFavorites only uses the object for that one-time import.
+        if name
+          save_dim_to_object(name, value, nil)
+        end
       end
     end
     def set_dim(len, value, redraw_dc = true)

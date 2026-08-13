@@ -146,11 +146,14 @@ lỗi.** Khác hẳn lần trước: lần trước là mất mà không ai bi�
   trong `observer.rb` không tìm thấy dialog nào để refresh (`DimsUI.dialog` = nil,
   nhánh đó tự thoát — không raise). Xem §8.
 - **Hai gợi ý nửa/đôi** `225 (x0.5)` / `900 (x2.0)` — một phép nhân đưa ra dưới dạng
-  kích thước, mà kéo grip thì đã làm đúng việc đó rồi. **Đây là lần bỏ duy nhất có
-  giá phải trả, và đã hỏi trước khi bỏ:** đó là thứ *duy nhất* menu đưa ra khi chưa
-  lưu gì, nên **máy khách vừa cài, chuột phải lần đầu không có kích thước nào để
-  bấm** cho tới khi tự lưu một giá trị qua `Open list...`. Người dùng chọn bỏ sau khi
-  hệ quả này được nói rõ.
+  kích thước, mà kéo grip thì đã làm đúng việc đó rồi. Đã hỏi trước khi bỏ vì lúc đó
+  tưởng là mất trắng: đó là thứ *duy nhất* menu đưa ra khi chưa lưu gì.
+  **Giá thật nhỏ hơn nhiều so với những gì tôi nói lúc hỏi**, và điều này chỉ lộ ra
+  một hôm sau: **gõ một số đo là số đó tự vào danh sách** (xem ngay dưới), nên danh
+  sách tự đầy lên từ chính việc đang làm. Cái mất thật sự chỉ còn là **lần chuột phải
+  đầu tiên, trước khi resize bất cứ thứ gì** — sau lần gõ đầu tiên là menu đã có
+  giá trị. Tôi đã nói với người dùng là họ sẽ phải tự vào `Open list...` lưu tay
+  trước; **điều đó sai.**
 
 Kéo theo một thay đổi không ai yêu cầu nhưng là hệ quả trực tiếp: **gạch ngang giờ có
 điều kiện**. Gạch ngang là để *chia*, nên nó cần có khối ở cả hai bên; mất khối gợi ý
@@ -174,6 +177,29 @@ definition của chính nó — một group đứng một mình thì khối này
 
 **Một danh sách chung cho cả ba trục**. Trục vẫn được truyền xuyên suốt vì chọn một
 kích thước thì phải áp vào đúng trục vừa bấm — chỉ chỗ *lưu* là chung.
+
+**Gõ một số đo thì số đó TỰ VÀO danh sách — và cái này đã có sẵn từ trước.**
+`set_dim_value` gọi `save_dim_to_object`, mà `save_dim_to_object` (`scale_tool.rb:11`)
+chính là `DimFavorites.add`. Đây là hành vi Curic Scale++ gốc, không phải thứ mới
+viết. Khi người dùng yêu cầu "gõ số đo thì tự thêm vào danh sách", tôi đã bắt đầu viết
+một hàm `remember_dim_value` mới — rồi test cho thấy **6/6 check xanh mà không cần dòng
+code nào**. Code đó đã bỏ đi. Bài học: đường `apply_dim_value` → `set_dim` →
+`set_dim_value` **hoàn toàn không có test nào** cho việc lưu, nên một tính năng đang
+chạy vẫn trông như chưa có.
+
+Chỗ thật sự thiếu, và là thay đổi duy nhất đã làm: `set_dim_value` chỉ lưu trong
+**nhánh một vật** (`selection.length == 1`). Nhánh còn lại — chọn nhiều vật, đi qua
+`transform_entities` — không lưu gì. Nghĩa là cùng một động tác gõ số, danh sách có
+đầy hay không **phụ thuộc vào đang chọn mấy vật**, mà trên màn hình không có gì giải
+thích sự khác nhau đó. Đã thêm `save_dim_to_object(name, value, nil)` vào nhánh else
+(`nil` vì không có definition đơn lẻ nào để đọc attribute cũ, và `DimFavorites` chỉ
+dùng object cho đúng việc import một lần đó).
+
+Mutation: 4 cái, 3 đỏ. Cái sống sót là **xoá `rescue` bên trong `save_dim_to_object`** —
+và đó không phải lỗ hổng bỏ quên: `set_dim` (dòng ~460) đã bọc chính lời gọi đó trong
+một `rescue` khác cũng `p(e)`, nên hành vi quan sát được y như nhau. Khác biệt thật duy
+nhất là lỗi lưu sẽ nhảy qua luôn `dc_redraw`, mà đường đó đi qua `DCObservers` và
+`ObjectSpace` — shim không dựng lại được. Đã ghi chú ngay tại chỗ trong test.
 
 **HtmlDialog là một cái browser** — và nó hành xử đúng như browser ở hai chỗ không ai
 muốn. Ctrl+A bôi xanh cả trang: tiêu đề, nút, cả danh sách. Chuột phải mở menu của
