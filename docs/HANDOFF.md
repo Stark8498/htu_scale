@@ -541,10 +541,10 @@ ruby build.rb
 ```
 
 Chạy `ruby -c` cho toàn bộ 49 file, rồi 13 gate. Fail bất kỳ gate nào là **không**
-đóng gói. Ra `dist/htu_scaleplus-1.2.1.rbz` (60 file, ~473 KB).
+đóng gói. Ra `dist/htu_scaleplus-1.2.2.rbz` (60 file, ~473 KB).
 
 Version nằm **một chỗ duy nhất**: `PLUGIN_VERSION` trong `htu_scaleplus.rb` (hiện
-**1.2.1**). `build.rb` đọc nó bằng regex để đặt tên .rbz, nên đổi ở đó là đủ — không có
+**1.2.2**). `build.rb` đọc nó bằng regex để đặt tên .rbz, nên đổi ở đó là đủ — không có
 bản sao nào khác trong code. Banner đầu `loader.rb` từng ghi số version và đã bỏ đi
 chính vì thế: một bản sao trong comment là một bản sao sẽ lệch.
 
