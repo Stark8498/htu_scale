@@ -386,6 +386,23 @@ end
       Sketchup.active_model.select_tool(nil)
       Sketchup.send_action("selectScaleTool:")
     end
+    # Resizes, and nothing else. In particular it does NOT put the value on the saved
+    # list.
+    #
+    # Curic Scale++ did: this method ended in save_dim_to_object, which is
+    # DimFavorites.add, so every size ever typed joined the list. Removed on request
+    # 2026-08-13. The list stopped being a record of everything that had been typed
+    # and became only what the user put in it deliberately, through the Dimensions
+    # window -- which is also the only place values can be taken back out, so a list
+    # that filled itself was a list that needed pruning.
+    #
+    # The one-line version of the trade: nothing types its way onto the menu any
+    # more. On a fresh install the menu stays empty until the window is opened, since
+    # the half and double suggestions are gone too.
+    #
+    # save_dim_to_object itself stays -- dims.rb still calls it for the Vue manager's
+    # own explicit save, which is a user asking to store a value rather than a side
+    # effect of resizing.
     def set_dim_value(dim, value)
       line = dim[:line]
       vec = dim[:line][0].vector_to(dim[:line][1])
@@ -393,37 +410,22 @@ end
       scale_x = 1
       scale_y = 1
       scale_z = 1
+      # The axis names this used to derive here went with the save; nothing else in
+      # the method needed them.
       if vec.parallel?(@tr_bb.xaxis)
         scale_x = value / len
-        name = "lenx"
       elsif vec.parallel?(@tr_bb.yaxis)
         scale_y = value / len
-        name = "leny"
       elsif vec.parallel?(@tr_bb.zaxis)
         scale_z = value / len
-        name = "lenz"
       end
       if @model.selection.length == 1 && @model.selection[0].respond_to?(:definition)
         tr = Geom::Transformation.scaling(scale_x, scale_y, scale_z)
         @model.selection[0].transformation *= tr
-        save_dim_to_object(name, value, @model.selection[0])
       else
         point = line[0].project_to_line([@bb_center, vec])
         tr = Geom::Transformation.scaling(point, scale_x, scale_y, scale_z)
         @model.active_entities.transform_entities(tr, @model.selection.to_a)
-        # The branch above has saved the size to the list since Curic Scale++, which
-        # is where "type a size and it joins the saved list" already comes from. This
-        # branch did not, so the same keystrokes did or did not fill the list
-        # depending on how many objects happened to be selected. The size typed
-        # against a multi-object bounding box is still a size this workshop works
-        # to, and the list is machine-wide, not a property of the one object -- so
-        # there is nothing about a group selection that makes it belong less.
-        #
-        # nil object: no single definition to read a legacy attribute off, and
-        # DimFavorites only uses the object for that one-time import.
-        if name
-          save_dim_to_object(name, value, nil)
-        end
       end
     end
     def set_dim(len, value, redraw_dc = true)

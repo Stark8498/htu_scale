@@ -9,7 +9,6 @@
 # checks also cover the rule that an unmirrorable key gives up on the preview
 # instead of showing something that does not match what will be applied.
 
-require "stringio"
 require_relative "su_shim"
 require File.expand_path("../htu_scaleplus.rb", __dir__)
 $SU_CALLS[:register_extension].first.load_extension
@@ -265,14 +264,17 @@ check "a selection of two goes through transform_entities instead" do
   tr && tr.to_a[10] != 1.0 && entities.length == 2
 end
 
-# This is where "type a size and it joins the saved list" lives, and it was NOT
-# written for this branch: set_dim_value has called save_dim_to_object since Curic
-# Scale++, and save_dim_to_object is DimFavorites.add. It had no coverage at all,
-# which is how the multi-object gap below survived unnoticed.
+# Resizing does NOT put the size on the saved list, removed on request 2026-08-13.
+# Curic Scale++ did: set_dim_value ended in save_dim_to_object, which is
+# DimFavorites.add, so every size ever typed joined the list. It is now only what the
+# user put there deliberately, through the Dimensions window -- which is also the only
+# place values come back out, so a list that filled itself was a list needing pruning.
 #
-# It matters more than it used to. The half/double suggestions are gone, so a fresh
-# install's menu is empty until something fills it, and this is what fills it.
-puts "\n--- a size typed in joins the saved list ---"
+# Every check here needs a positive control on the same line. "The list did not grow"
+# passes just as well when the resize never happened, so each one asserts the object
+# actually changed size too. Without that these are six checks that a no-op is a
+# no-op.
+puts "\n--- typing a size does not touch the saved list ---"
 
 PLUG = TRINH_VAN_PHUC::HTU_ScalePlus
 FAV = PLUG::DimFavorites
@@ -283,69 +285,47 @@ def reset_favorites!
   FAV::AXES.each { |axis| Sketchup.defaults.delete(["HTU ScalePlus", FAV.attribute(axis)]) }
 end
 
-check "typing 40 puts 40 on the list" do
+X_RESIZED = [("40".to_l / 100).round(4), 1.0, 1.0].freeze
+
+check "typing 40 resizes, and leaves the list empty" do
   reset_favorites!
   g = box(100, 60, 30)
   resize(g, "lenx")
-  FAV.list(g, "lenx").map(&:to_f) == [FORTY.to_f]
+  scales(g) == X_RESIZED && FAV.list(g, "lenx").empty?
 end
 
-# The stored value is the length the VCB read, not the characters typed. "40" in a
-# millimetre model is 1.57", and a list that kept the string would read as 40" the
-# next time the menu was built.
-check "what is stored is the length applied, not the text" do
+# One list serves all three axes, so a leak on any one of them shows up on all three.
+check "on none of the three axes" do
+  ["lenx", "leny", "lenz"].all? do |axis|
+    reset_favorites!
+    g = box(100, 60, 30)
+    resize(g, axis)
+    scales(g) != [1.0, 1.0, 1.0] && FAV.list(g, "lenx").empty?
+  end
+end
+
+# A list the user has filled must stay exactly as they left it -- not merely "not
+# grow". An add that deduplicated would look like a no-op against an empty list.
+check "a list the user filled is left exactly as it was" do
   reset_favorites!
+  good, = FAV.parse("45, 200")
+  FAV.add(nil, "lenx", good)
+  before = FAV.list(nil, "lenx").map(&:to_f)
   g = box(100, 60, 30)
   resize(g, "lenx")
-  FAV.list(g, "lenx").first == FORTY
+  scales(g) == X_RESIZED && FAV.list(nil, "lenx").map(&:to_f) == before
 end
 
-# One list serves all three axes, so a height typed on z is offered on x as well.
-check "a size typed on z is offered on x too" do
+# Saving sat below apply_dim_value rather than on the typing path, so picking a size
+# off the context menu saved it too. Both are gone with the one removal.
+check "nor does picking a size off the menu" do
   reset_favorites!
   g = box(100, 60, 30)
-  resize(g, "lenz")
-  FAV.list(g, "lenx").map(&:to_f) == [FORTY.to_f]
+  armed(g).apply_dim_value("lenx", "40".to_l)
+  scales(g) == X_RESIZED && FAV.list(g, "lenx").empty?
 end
 
-check "nothing is saved when the entry could not be read" do
-  reset_favorites!
-  g = box(100, 60, 30)
-  resize(g, "lenz", "nonsense")
-  FAV.list(g, "lenz").empty?
-end
-
-check "retyping a size already listed does not list it twice" do
-  reset_favorites!
-  g = box(100, 60, 30)
-  resize(g, "lenx")
-  resize(box(100, 60, 30), "leny")
-  FAV.list(g, "lenx").size == 1
-end
-
-check "two different sizes both land, sorted" do
-  reset_favorites!
-  resize(box(100, 60, 30), "lenx", "40")
-  resize(box(100, 60, 30), "lenx", "25")
-  FAV.list(nil, "lenx").map(&:to_f) == ["25".to_l.to_f, FORTY.to_f].sort
-end
-
-# Saving sits below apply_dim_value, not on the typing path, so a size picked off
-# the context menu is saved the same way. That is pre-existing and wanted: a size
-# picked from "(in model)" is one the user chose to work to, and add deduplicates so
-# picking an already-saved one changes nothing.
-check "a size picked off the menu is saved the same way" do
-  reset_favorites!
-  g = box(100, 60, 30)
-  armed(g).apply_dim_value("lenx", FORTY)
-  FAV.list(g, "lenx").map(&:to_f) == [FORTY.to_f]
-end
-
-# The gap this commit closes. With two objects selected the resize goes through
-# transform_entities instead, and that branch saved nothing -- so the same
-# keystrokes did or did not fill the list depending on how many objects happened to
-# be selected, with nothing on screen to explain the difference.
-check "typing against a selection of two saves it too" do
+check "nor does typing against a selection of two" do
   reset_favorites!
   a = box(100, 60, 30)
   b = box(10, 10, 10)
@@ -359,39 +339,36 @@ check "typing against a selection of two saves it too" do
   tool.instance_variable_set(:@selection, MODEL.selection)
   tool.store_bounds_points
   tool.compute_dimensions(VIEW, true)
+  $SU_CALLS[:transform_entities].clear
   tool.lock_axis("lenz")
   tool.onUserText("40", VIEW)
-  FAV.list(nil, "lenz").map(&:to_f) == [FORTY.to_f]
+  tr, = $SU_CALLS[:transform_entities].last
+  tr && tr.to_a[10] != 1.0 && FAV.list(nil, "lenz").empty?
 end
 
-# The resize is committed before this runs, so a failure in the bookkeeping must not
-# surface as a failed resize. Reading the plugin's own p(e) back rather than letting
-# it scroll past: it is the difference between the failure being handled and being
-# swallowed, and it keeps a RuntimeError from printing into a clean build log.
-check "a failure while saving does not take the resize with it" do
+# The whole point of removing it: nothing reaches the list except the window. If
+# DimFavorites.add is called at all on a resize, this raises rather than quietly
+# saving, so it catches a save through any route -- not just the two known ones.
+check "nothing on the resize path calls the list's writer at all" do
   reset_favorites!
   g = box(100, 60, 30)
-  FAV.define_singleton_method(:add) { |*| raise "preferences unavailable" }
-  noise = StringIO.new
-  begin
-    $stdout = noise
-    resize(g, "lenx")
-  ensure
-    $stdout = STDOUT
-  end
-  scales(g) == [(FORTY / 100).round(4), 1.0, 1.0] &&
-    noise.string.include?("preferences unavailable")
+  reached = false
+  FAV.define_singleton_method(:add) { |*| reached = true }
+  resize(g, "lenx")
+  armed(box(100, 60, 30)).apply_dim_value("leny", "40".to_l)
+  scales(g) == X_RESIZED && !reached
 ensure
   FAV.singleton_class.send(:remove_method, :add)
 end
 
-# Deleting the rescue inside save_dim_to_object is a mutation that SURVIVES this
-# check, and that is not an oversight: set_dim wraps the same call in a rescue of
-# its own that also does p(e), so the observable behaviour is identical either way.
-# The one real difference -- a save failure would skip dc_redraw as well, because
-# the exception jumps past it -- runs through DCObservers and ObjectSpace, which the
-# shim cannot stand in for. Left uncovered on purpose, recorded so the gap is not
-# read as one nobody looked for.
+# save_dim_to_object itself stays: dims.rb calls it for the Vue manager's own explicit
+# save, which is a user asking to store a value rather than a side effect of resizing.
+# DimsUI has no entry point left (HANDOFF section 8), so that caller is unreachable
+# today -- the method is kept because removing it is a separate job, not because
+# anything reaches it.
+check "the storage method is still there for the manager's own save" do
+  PLUG.respond_to?(:save_dim_to_object)
+end
 
 # A label can be legitimately absent: a dimension seen end-on is a dot, and there is
 # nothing to draw or click. Which dimension that is depends on the camera, and it

@@ -143,14 +143,14 @@ cùng chỉ còn: danh sách đã lưu, `Open list...`, `Text size`.
   trong `observer.rb` không tìm thấy dialog nào để refresh (`DimsUI.dialog` = nil,
   nhánh đó tự thoát — không raise). Xem §8.
 - **Hai gợi ý nửa/đôi** `225 (x0.5)` / `900 (x2.0)` — một phép nhân đưa ra dưới dạng
-  kích thước, mà kéo grip thì đã làm đúng việc đó rồi. Đã hỏi trước khi bỏ vì lúc đó
-  tưởng là mất trắng: đó là thứ *duy nhất* menu đưa ra khi chưa lưu gì.
-  **Giá thật nhỏ hơn nhiều so với những gì tôi nói lúc hỏi**, và điều này chỉ lộ ra
-  một hôm sau: **gõ một số đo là số đó tự vào danh sách** (xem ngay dưới), nên danh
-  sách tự đầy lên từ chính việc đang làm. Cái mất thật sự chỉ còn là **lần chuột phải
-  đầu tiên, trước khi resize bất cứ thứ gì** — sau lần gõ đầu tiên là menu đã có
-  giá trị. Tôi đã nói với người dùng là họ sẽ phải tự vào `Open list...` lưu tay
-  trước; **điều đó sai.**
+  kích thước, mà kéo grip thì đã làm đúng việc đó rồi. Đã hỏi trước khi bỏ vì đó là
+  thứ *duy nhất* menu đưa ra khi chưa lưu gì.
+  Giá của nó đã bị tôi đánh giá **sai hai lần theo hai hướng ngược nhau**, nên ghi lại
+  cho rõ: lúc hỏi tôi nói khách phải tự mở `Open list...` lưu tay trước; rồi phát hiện
+  gõ số đo là tự lưu nên nói lại là giá nhỏ hơn nhiều; **rồi chính việc tự lưu đó bị bỏ
+  theo yêu cầu** (mục dưới). Kết luận cuối, và lần này khớp với code: **máy mới cài,
+  menu chuột phải rỗng cho tới khi tự mở cửa sổ và nhập giá trị.** Đúng như câu tôi nói
+  đầu tiên — nhưng lúc đó nó chưa đúng.
 
 - **`Referenced Dimensions` + các dòng `(in model)`** — kích thước mà các instance
   khác của cùng definition đang có. Nghe hay, dùng thì dở, và **chính ảnh chụp của
@@ -196,28 +196,42 @@ Mutation test: 6 mutation, **6 đỏ**, không cái nào sống sót.
 **Một danh sách chung cho cả ba trục**. Trục vẫn được truyền xuyên suốt vì chọn một
 kích thước thì phải áp vào đúng trục vừa bấm — chỉ chỗ *lưu* là chung.
 
-**Gõ một số đo thì số đó TỰ VÀO danh sách — và cái này đã có sẵn từ trước.**
-`set_dim_value` gọi `save_dim_to_object`, mà `save_dim_to_object` (`scale_tool.rb:11`)
-chính là `DimFavorites.add`. Đây là hành vi Curic Scale++ gốc, không phải thứ mới
-viết. Khi người dùng yêu cầu "gõ số đo thì tự thêm vào danh sách", tôi đã bắt đầu viết
-một hàm `remember_dim_value` mới — rồi test cho thấy **6/6 check xanh mà không cần dòng
-code nào**. Code đó đã bỏ đi. Bài học: đường `apply_dim_value` → `set_dim` →
-`set_dim_value` **hoàn toàn không có test nào** cho việc lưu, nên một tính năng đang
-chạy vẫn trông như chưa có.
+**Gõ một số đo thì số đó KHÔNG vào danh sách. Bỏ theo yêu cầu, 2026-08-13.**
+Danh sách giờ chỉ chứa những gì người dùng **cố ý** đặt vào, qua cửa sổ Dimensions —
+mà đó cũng là chỗ duy nhất lấy giá trị ra được, nên một danh sách tự đầy là một danh
+sách phải đi dọn.
 
-Chỗ thật sự thiếu, và là thay đổi duy nhất đã làm: `set_dim_value` chỉ lưu trong
-**nhánh một vật** (`selection.length == 1`). Nhánh còn lại — chọn nhiều vật, đi qua
-`transform_entities` — không lưu gì. Nghĩa là cùng một động tác gõ số, danh sách có
-đầy hay không **phụ thuộc vào đang chọn mấy vật**, mà trên màn hình không có gì giải
-thích sự khác nhau đó. Đã thêm `save_dim_to_object(name, value, nil)` vào nhánh else
-(`nil` vì không có definition đơn lẻ nào để đọc attribute cũ, và `DimFavorites` chỉ
-dùng object cho đúng việc import một lần đó).
+Cả chuyện này diễn ra trong ba nhịp trong cùng một ngày, ghi lại vì nhịp giữa là chỗ
+dễ đi lại vào:
 
-Mutation: 4 cái, 3 đỏ. Cái sống sót là **xoá `rescue` bên trong `save_dim_to_object`** —
-và đó không phải lỗ hổng bỏ quên: `set_dim` (dòng ~460) đã bọc chính lời gọi đó trong
-một `rescue` khác cũng `p(e)`, nên hành vi quan sát được y như nhau. Khác biệt thật duy
-nhất là lỗi lưu sẽ nhảy qua luôn `dc_redraw`, mà đường đó đi qua `DCObservers` và
-`ObjectSpace` — shim không dựng lại được. Đã ghi chú ngay tại chỗ trong test.
+1. Người dùng yêu cầu "gõ số đo thì tự thêm vào danh sách". Tôi bắt đầu viết một hàm
+   `remember_dim_value` mới — rồi **gỡ ra và test vẫn 6/6 xanh**. Tính năng đã có sẵn:
+   `set_dim_value` kết thúc bằng `save_dim_to_object`, mà cái đó (`scale_tool.rb:11`)
+   chính là `DimFavorites.add`. Hành vi Curic Scale++ gốc. **Bài học thật:** đường
+   `apply_dim_value` → `set_dim` → `set_dim_value` lúc đó **không có một test nào** cho
+   việc lưu, nên một tính năng đang chạy trông y như chưa làm.
+2. Chỗ thật sự thiếu: chỉ **nhánh một vật** lưu, nhánh chọn nhiều vật (qua
+   `transform_entities`) thì không — cùng một động tác gõ mà có lưu hay không lại tuỳ
+   đang chọn mấy vật. Đã bù vào.
+3. **Rồi bỏ cả hai**, theo yêu cầu. `set_dim_value` giờ chỉ resize. Các biến `name =
+   "lenx"` … cũng đi theo, vì trong method đó không còn ai dùng.
+
+`PLUGIN.save_dim_to_object` **giữ lại**: `dims.rb:109` còn gọi cho lệnh lưu *tường minh*
+của dialog Vue — đó là người dùng yêu cầu lưu, không phải tác dụng phụ của resize.
+(DimsUI hiện không còn lối vào, xem §8 — giữ vì xoá là việc riêng, không phải vì còn ai
+tới được.)
+
+**Mọi check ở đây đều cần positive control cùng dòng.** "Danh sách không lớn lên" xanh
+y như nhau khi resize *không hề xảy ra*, nên mỗi check phải khẳng định luôn là vật đã
+đổi kích thước. Mutation test chứng minh điều đó là cần: mutation "làm resize hỏng hẳn"
+kéo **cả 5** check "không lưu" sang đỏ — không có positive control thì cả 5 vẫn xanh và
+cụm test này chỉ đang chứng minh một no-op là no-op.
+
+Có một check bắt theo *hành vi* chứ không theo hai chỗ đã biết: stub `DimFavorites.add`
+rồi khẳng định nó **không hề được gọi** trên đường resize. Thêm một đường lưu mới ở bất
+cứ đâu cũng bị nó bắt.
+
+Mutation: 3 cái, 3 đỏ.
 
 **HtmlDialog là một cái browser** — và nó hành xử đúng như browser ở hai chỗ không ai
 muốn. Ctrl+A bôi xanh cả trang: tiêu đề, nút, cả danh sách. Chuột phải mở menu của
