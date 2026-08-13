@@ -57,6 +57,10 @@
 #   pts=     bb_data[:scale_points].length — số grip plugin sẽ vẽ. 26 / 6 / 2.
 #   wrap=    có group tạm của GroupLock không. Chỉ có khi chọn từ 2 vật trở lên.
 #   state=   @tool_state. 1 = đang kéo, 0 = đã buông.
+#   pend=    cờ @behavior_repair_pending. Cú buông grip có giương cờ không.
+#   fix=     số lần reassert_behavior đã chạy.
+#   ret=     nó trả về gì lần cuối. false = "không có gì lệch", true = đã ghi + re-pick.
+#   pick=    số lần repick_scale_tool đã chạy.
 
 module HTU_MaskProbe
   # Gán thẳng sẽ cảnh báo mỗi lần file này được load lại sau một reload.
@@ -91,7 +95,8 @@ module HTU_MaskProbe
     defn = safe { first && first.respond_to?(:definition) ? first.definition : nil }
     t = tool
 
-    format("sel=%-2d cls=%-16s defid=%-12s mask=%-5s want=%-4s lock=%-5s pts=%-4s wrap=%-5s state=%s",
+    format("sel=%-2d cls=%-16s defid=%-12s mask=%-5s want=%-4s lock=%-5s pts=%-4s wrap=%-5s " \
+           "state=%s pend=%-5s fix=%-3s ret=%-5s pick=%s",
            sel.length,
            safe { sel.empty? ? "-" : sel[0].class.name.split("::").last },
            safe { defn.is_a?(String) ? defn : (defn ? defn.object_id : "-") },
@@ -100,13 +105,60 @@ module HTU_MaskProbe
            safe { t ? t.send(:axis_locked?, first) : "-" },
            safe { d = t && t.bb_data; d && d[:scale_points] ? d[:scale_points].length : "-" },
            safe { P::GroupLock.temp_group ? "YES" : "no" },
-           safe { t ? t.instance_variable_get(:@tool_state) : "-" })
+           safe { t ? t.instance_variable_get(:@tool_state) : "-" },
+           safe { P.instance_variable_get(:@behavior_repair_pending).inspect },
+           @fix_calls,
+           @fix_return.inspect,
+           @pick_calls)
+  end
+
+  # Đếm, không đoán. Ba câu hỏi mà bốn cột cuối trả lời, theo đúng thứ tự đi tìm:
+  #
+  #   pend=  cú buông grip có giương cờ không. false suốt = observer không bắt được
+  #          chuyển 1 -> 0, và lúc đó đừng nhìn đi đâu khác.
+  #   fix=   reassert_behavior đã chạy bao nhiêu lần. 0 = mouse move không gọi tới nó
+  #          (overlay không nhận onMouseMove, hoặc navigating? trả true).
+  #   ret=   nó trả về gì lần cuối. false = "không có gì lệch" — tức mask đã đúng 120
+  #          rồi mà grip vẫn 26, và vấn đề nằm ở chỗ SketchUp đọc lại mask.
+  #          true = đã ghi mask và đã re-pick.
+  #   pick=  repick_scale_tool chạy bao nhiêu lần. fix tăng mà pick không tăng nghĩa là
+  #          repick chết trong rescue của chính nó.
+  def self.wrap_counters
+    @fix_calls = 0
+    @pick_calls = 0
+    @fix_return = nil
+    @orig_fix = P.method(:reassert_behavior)
+    @orig_pick = P.method(:repick_scale_tool)
+    orig_fix = @orig_fix
+    orig_pick = @orig_pick
+    P.define_singleton_method(:reassert_behavior) do
+      HTU_MaskProbe.instance_variable_set(:@fix_calls,
+        HTU_MaskProbe.instance_variable_get(:@fix_calls) + 1)
+      out = orig_fix.call
+      HTU_MaskProbe.instance_variable_set(:@fix_return, out)
+      out
+    end
+    P.define_singleton_method(:repick_scale_tool) do
+      HTU_MaskProbe.instance_variable_set(:@pick_calls,
+        HTU_MaskProbe.instance_variable_get(:@pick_calls) + 1)
+      orig_pick.call
+    end
+  end
+
+  # Trả lại bằng cách gán lại Method đã giữ, không phải remove_method: cả hai bản đều
+  # nằm trong cùng một singleton method table, nên remove sẽ xoá luôn bản thật.
+  def self.unwrap_counters
+    P.define_singleton_method(:reassert_behavior, @orig_fix) if @orig_fix
+    P.define_singleton_method(:repick_scale_tool, @orig_pick) if @orig_pick
+    @orig_fix = nil
+    @orig_pick = nil
   end
 
   def self.on
     off
     @ticks = 0
     @last_line = nil
+    wrap_counters
     @timer = UI.start_timer(0.1, true) do
       begin
         line = snapshot
@@ -130,6 +182,7 @@ module HTU_MaskProbe
   def self.off
     UI.stop_timer(@timer) if @timer
     @timer = nil
+    unwrap_counters
     true
   end
 end
