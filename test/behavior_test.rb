@@ -630,6 +630,42 @@ ensure
   MODEL.tools.active_tool_name = nil
 end
 
+# ---- all-handles mode ----
+#
+# The repair does not restore "xyz". It restores whatever mode the button says, because
+# #behavior_drift compares each mask against behavior_state and #write_behavior writes
+# that same state. So it is symmetric, and these two checks are what make that a fact
+# rather than a reading of the code.
+#
+# Measured behaviour helps here: SketchUp CLEARS the mask on a drag, and cleared is 0,
+# which is exactly what all-handles wants. So a drag in this mode drifts by nothing.
+check "a drag in all-handles mode has nothing to repair" do
+  self.stored = ALL
+  group = component(ALL)
+  select(group)
+  $SU_CALLS[:send_action].clear
+  $SU_CALLS[:select_tool].clear
+  $SU_CALLS[:start_operation].clear
+  drag
+  mask_of(group) == ALL && $SU_CALLS[:send_action].empty? &&
+    $SU_CALLS[:select_tool].empty? && $SU_CALLS[:start_operation].empty?
+end
+
+# And the other direction, which is the question worth asking out loud: if a mask ever
+# came back as a LOCK while the button says all handles, the repair has to pull it to 0.
+# Nothing measured does that -- SketchUp clears rather than sets -- but the repair is
+# written against the remembered mode, not against a hardcoded 120, and this is the check
+# that keeps it that way.
+check "and a mask that drifts INTO a lock is pulled back to all handles" do
+  self.stored = ALL
+  group = component(ALL)
+  select(group)
+  group.definition.behavior.no_scale_mask = XYZ   # 6 grips, with the button saying 26
+  $SU_CALLS[:send_action].clear
+  drag
+  mask_of(group) == ALL && $SU_CALLS[:send_action].include?("selectScaleTool:")
+end
+
 # A selection of several objects has no definition of its own to carry a mask, so for
 # it the repair is the wrapper, not the write: masks written onto the objects leave the
 # union cage ungoverned, which is the whole reason GroupLock exists. A wrapper can go

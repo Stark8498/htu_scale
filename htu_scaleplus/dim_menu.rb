@@ -1,7 +1,7 @@
 module TRINH_VAN_PHUC::HTU_ScalePlus
   # Builds the context menu shown when right-clicking a dimension:
   #
-  #   45 mm                 <- the saved sizes, checked when one is the current length
+  #   45 mm                 <- the saved sizes, plain items, no checkmark
   #   200 mm
   #   ---------
   #   Open list...          add, delete, delete all -- all in one window
@@ -43,6 +43,10 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   #   on purpose. The saved list is the curated answer to the same question, and
   #   ScalePPTool#referenced_dims and #same_dc_definition went with it.
   #
+  # And the checkmark that used to sit beside the size matching the current length --
+  # see #add_value_items. Text size keeps its tick, because there a tick means a setting
+  # is switched on; a size is not a setting.
+  #
   # Everything else here is Curic Scale++ 1.1.2's own menu.
   module DimMenu
     def self.build(menu, tool, object, axis, length)
@@ -63,12 +67,18 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
     end
 
     # A saved size applies immediately -- one click, no confirmation.
+    #
+    # No checkmark on the one matching the current size. It used to carry a
+    # set_validation_proc returning MF_CHECKED, which is what a tick is for elsewhere in
+    # this menu -- Text size, where it marks a setting that is switched ON. A size is not
+    # a setting: the tick was only saying "this object happens to be 440 right now", which
+    # the dimension the user just right-clicked already says, in the same number.
+    #
+    # `length` stays in the signature. It is what the caller has and what the tick was
+    # derived from, and taking it out would ripple through #build for nothing.
     def self.add_value_items(menu, tool, axis, length, values)
       values.each do |value|
-        item = menu.add_item(value.to_s) { tool.apply_dim_value(axis, value) }
-        menu.set_validation_proc(item) do
-          value == length ? MF_CHECKED : MF_ENABLED
-        end
+        menu.add_item(value.to_s) { tool.apply_dim_value(axis, value) }
       end
     end
 

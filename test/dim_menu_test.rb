@@ -3,16 +3,19 @@
 # The dimension context menu is the deliverable here, so its shape is pinned to
 # the agreed mockup:
 #
-#   45 mm / 200 mm / 400 mm
-#   ---------
-#   Referenced Dimensions    (grayed, only when the model has other sizes)
-#   900 mm (in model)
+#   45 mm / 200 mm / 400 mm     plain items -- no heading, no checkmark
 #   ---------
 #   Open list...
 #   Text size  >
 #
-# With nothing saved and nothing referenced, only the last two -- and no divider
-# above them, since there is no block left for it to divide.
+# With nothing saved, only the last two -- and no divider above them, since there
+# is no block left for it to divide.
+#
+# This header listed a "Referenced Dimensions" block and its "(in model)" sizes
+# until 2026-08-13. Both the block and the code behind it were removed on request,
+# and the checkmark beside the size matching the current length went the same day.
+# Kept accurate rather than historical: the checks below are the record of what was
+# removed and why, and a mockup that disagrees with them is worse than no mockup.
 #
 # DimMenu is handed a menu object and only calls add_item / add_submenu /
 # add_separator / set_validation_proc on it, so a recorder stands in for
@@ -97,6 +100,11 @@ TOOL_SPY = ToolSpy.new
 
 # The saved list is a machine-wide preference, so it carries between checks
 # unless it is put back to "fresh install" first.
+#
+# Side effect worth knowing before it costs someone an afternoon: the fresh Settings
+# also drops the defaults loader.rb registered on the old one, so after any #build the
+# text size reads nil and NO entry in the Text size submenu is ticked. That is why the
+# check on that tick sets the size first instead of trusting the default -- it has to.
 def reset_favorites!
   PLUG.settings = PLUG::Settings.new("HTU ScalePlus")
   Sketchup.defaults.delete(["HTU ScalePlus", FAV::SHARED_KEY.to_s])
@@ -144,9 +152,20 @@ check "Show Manager is not offered -- Open list... is the one way in" do
   !menu.labels.include?("Show Manager") && menu.labels.include?("Open list...")
 end
 
-check "every size carries a validation proc for the checkmark" do
-  menu.entries[0, 3].all? { |label| menu.validations.key?(label) }
+# Removed on request 2026-08-13. The sizes are plain items now: no size carries a
+# validation proc, so none of them can ever draw a tick. Asserted over EVERY entry rather
+# than the first three, because a proc attached to a size further down the list would be
+# just as visible to the user and just as invisible to a check that only looks at three.
+check "no size carries a validation proc, so none of them can be ticked" do
+  m, = build(%w[45 200 400])
+  sizes = m.entries[0, 3]
+  sizes.length == 3 && m.validations.keys.none? { |label| sizes.include?(label) }
 end
+
+# The tick that IS still wanted is checked further down, under "Text size submenu": there
+# a tick marks a setting that is switched ON, which is what a tick means. It is not
+# duplicated here -- that check sets the size before reading the tick, and it has to,
+# because #reset_favorites! drops the default (see the note on it).
 
 # The only check that clicking a size does anything used to be the one on the
 # half/double suggestion, which is gone -- so deleting it would have taken the
@@ -163,15 +182,14 @@ check "picking a saved size resizes to it" do
   TOOL_SPY.calls.last == [:apply_dim_value, "lenx", FAV.list(nil, "lenx")[1]]
 end
 
-check "the size matching the current length is checked" do
+# The size that used to be ticked -- the one equal to the current length -- is now an
+# ordinary row like the rest. Driven with that exact length so the check sits on the one
+# case the tick was ever visible in; passing with any other length would prove nothing.
+check "and the size equal to the current length is an ordinary row" do
   current = FAV.list(group, "lenx")[1]
   m = RecordingMenu.new
   MENU.build(m, nil, group, "lenx", current)
-  checked = m.entries[0, 3].select do |label|
-    proc = m.validations[label]
-    proc && proc.call == MF_CHECKED
-  end
-  checked.size == 1
+  m.entries.include?(current.to_s) && !m.validations.key?(current.to_s)
 end
 
 puts "\n--- one line, not three ---"
@@ -208,10 +226,21 @@ check "offers Small, Medium, Large" do
   menu.submenus["Text size"].labels == %w[Small Medium Large]
 end
 
+# Guarded rather than chained: removing the validation proc made this raise
+# NoMethodError on nil instead of failing, and a check that explodes is not a check that
+# holds a line -- the run stops looking like "one thing changed" and starts looking like
+# "the tests are broken".
 check "the active size is checked" do
   sub = menu.submenus["Text size"]
-  sub.blocks["Large"].call
-  sub.validations["Large"].call == MF_CHECKED && sub.validations["Small"].call == MF_ENABLED
+  pick = sub.blocks["Large"]
+  next false unless pick
+
+  pick.call
+  large = sub.validations["Large"]
+  small = sub.validations["Small"]
+  next false unless large && small
+
+  large.call == MF_CHECKED && small.call == MF_ENABLED
 end
 
 puts "\n--- empty list: a fresh install, which is what everyone sees first ---"

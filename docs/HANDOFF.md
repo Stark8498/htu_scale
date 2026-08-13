@@ -115,11 +115,21 @@ SketchUp, còn transformation đặt từ Ruby thì mọi mask đều đổi đ�
 **Danh sách kích thước đã lưu** — chuột phải vào số đo:
 
 ```
-45 / 200 / 400          <- tick khi trùng kích thước hiện tại
+45 / 200 / 400          <- item thường, KHÔNG có dấu tích
 --------
 Open list...            <- mở cửa sổ Dimensions: thêm, xoá từng cái, xoá hết
-Text size >             Small / Medium / Large
+Text size >             Small / Medium / Large  (vẫn có tích)
 ```
+
+**Dấu tích bên cạnh kích thước đã bỏ, 2026-08-13, theo yêu cầu.** Trước đó
+`add_value_items` gắn `set_validation_proc` trả `MF_CHECKED` cho giá trị trùng
+`length`. `Text size` **giữ** tích của nó, và khác biệt là chỗ đáng ghi: ở đó dấu tích
+đánh dấu một **thiết lập đang bật** — đúng nghĩa của dấu tích. Một kích thước không phải
+thiết lập; cái tích chỉ đang nói "vật này hiện là 440", mà số đo người dùng vừa chuột
+phải vào đã nói điều đó rồi, bằng đúng con số ấy.
+
+Tham số `length` **vẫn còn** trong `add_value_items`. Nó là thứ caller đang có và là thứ
+dấu tích được suy ra từ đó; bỏ nó đi sẽ lan sang `#build` mà không được gì.
 
 Khi **chưa lưu gì**, menu chỉ còn đúng hai dòng cuối — `Open list...` và
 `Text size` — **không có gạch ngang** ở trên chúng.
