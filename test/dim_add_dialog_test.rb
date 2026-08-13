@@ -146,7 +146,31 @@ end
 check "a comma separated entry still adds every value at once" do
   d, g = open_on
   fire(d, "add", "45, 200, 400")
-  FAV.list(g, "lenx").size == 3 && rendered(d)["message"].include?("3")
+  FAV.list(g, "lenx").size == 3 && rendered(d)["values"].size == 3
+end
+
+# Removed on request, 2026-08-13: "Added 1", "Removed 100" and "Deleted all" each
+# announced something the list right below had already shown. Pinned all three at
+# once, because a message coming back on any one of the paths is the same defect.
+check "a successful add, remove or wipe says nothing at all" do
+  d, g = open_on(%w[45 200])
+  quiet = []
+  fire(d, "add", "400")
+  quiet << rendered(d)["message"]
+  fire(d, "remove", rendered(d)["values"].first)
+  quiet << rendered(d)["message"]
+  $SU_ANSWER = IDYES
+  fire(d, "removeAll")
+  quiet << rendered(d)["message"]
+  FAV.list(g, "lenx").empty? && quiet.all? { |m| m.to_s.empty? }
+end
+
+# The strip is empty on every path but one, and an element with a margin and a
+# min-height is still 28px of nothing when it holds no text.
+check "the empty message strip takes up no room" do
+  d, = open_on
+  d.html.include?("#msg:empty { display: none; }") &&
+    !d.html.include?("min-height: 16px")
 end
 
 check "adding a value already saved does not duplicate it" do
@@ -157,6 +181,9 @@ end
 
 puts "\n--- entries that cannot be read ---"
 
+# The one message left, and the reason the strip was not deleted outright: a
+# rejected entry leaves the list looking exactly as it did, so with nothing said
+# the window would answer a typo with silence.
 check "one bad value rejects the whole entry and names it" do
   d, g = open_on
   fire(d, "add", "45, abc, 400")

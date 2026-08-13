@@ -63,17 +63,22 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       dialog.add_action_callback("closeDialog") { close }
     end
 
+    # Nothing is reported back on success. "Added 1" sat above a list that had just
+    # grown by one row, "Removed 100" above the row that had just vanished, and
+    # "Deleted all" above an empty list the user had already confirmed emptying --
+    # each one a sentence saying what was already on screen. A failure still speaks,
+    # because that is the case the list cannot show: it looks untouched either way.
     def self.add(text)
       good, bad = DimFavorites.parse(text)
       unless bad.empty?
         return refresh("Cannot read: #{bad.join(', ')} -- nothing added")
       end
       if good.empty?
-        return refresh("")
+        return refresh
       end
       DimFavorites.add(@object, @axis, good)
       redraw
-      refresh("Added #{good.size}")
+      refresh
     end
 
     # The list is right there, so the value to drop is a click away rather than
@@ -85,7 +90,7 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       end
       DimFavorites.remove(@object, @axis, value)
       redraw
-      refresh("Removed #{text}")
+      refresh
     end
 
     # Confirmed, because Ctrl+Z cannot bring the list back: it lives in
@@ -101,7 +106,7 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       end
       DimFavorites.clear(@object, @axis)
       redraw
-      refresh("Deleted all")
+      refresh
     end
 
     # No start_operation around any of these any more: the list moved out of the
@@ -164,8 +169,11 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
           button { padding: 6px 12px; font: inherit; border-radius: 4px;
                    border: 1px solid rgba(128,128,128,.5); background: buttonface;
                    color: buttontext; cursor: pointer; }
-          #msg { min-height: 16px; margin: 6px 0; font-size: 12px; opacity: .75; }
-          #msg.bad { opacity: 1; color: #c0392b; }
+          #msg { margin: 6px 0; font-size: 12px; color: #c0392b; }
+          /* Only failures reach it now, so most of the time it holds nothing.
+             Without this it still reserved its line and its margins, leaving a
+             dead band between the entry field and the list that never filled. */
+          #msg:empty { display: none; }
           ul { flex: 1 1 auto; overflow-y: auto; margin: 0; padding: 0;
                list-style: none; border: 1px solid rgba(128,128,128,.35);
                border-radius: 4px; }
@@ -197,9 +205,9 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
         <script>
         function render(data) {
           document.getElementById('heading').textContent = data.heading;
-          var msg = document.getElementById('msg');
-          msg.textContent = data.message || '';
-          msg.className = /Cannot|gone/.test(data.message || '') ? 'bad' : '';
+          // No class to pick any more: every message that gets this far is a
+          // failure, so the styling is unconditional and the empty case is CSS.
+          document.getElementById('msg').textContent = data.message || '';
 
           document.getElementById('all').disabled = !data.values.length;
 

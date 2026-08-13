@@ -174,6 +174,19 @@ xanh nhờ listener kia dù chính nó bị xoá. `dim_add_dialog_test.rb` có h
 event)` cắt lấy thân của listener được gọi tên rồi mới đọc trong đó — mutation test xác nhận
 là cần: không có helper thì xoá miễn trừ INPUT khỏi `keydown` vẫn xanh hết.
 
+**Cửa sổ không báo lại khi thành công**, theo yêu cầu 2026-08-13. Trước đó có ba dòng ở
+dải `#msg`: `Added 1`, `Removed 100`, `Deleted all` — mỗi dòng nói lại đúng cái danh sách
+ngay bên dưới vừa thể hiện (thêm một hàng, mất một hàng, rỗng sau khi đã bấm Yes xác nhận).
+**Chỉ giữ lại thông báo lỗi** `Cannot read: … -- nothing added`: đó là trường hợp duy nhất
+danh sách *không* nói được gì, vì nhập sai thì nó trông y như cũ. Bỏ hết thì một cái typo
+được trả lời bằng im lặng.
+
+Kèm theo: `#msg:empty { display: none; }` và bỏ `min-height`. Dải đó giờ gần như luôn rỗng,
+mà một thẻ còn `min-height` cộng `margin` thì vẫn chiếm ~28px trống giữa ô nhập và danh
+sách. `render()` cũng không còn chọn class nữa — mọi message tới được đó đều là lỗi.
+`dim_add_dialog_test.rb` chốt cả ba đường im lặng trong **một** check, vì message quay lại ở
+đường nào cũng là cùng một lỗi; mutation test: 5 mutation, mỗi cái đỏ đúng một check.
+
 **Retarget và số đo khi hover — ĐÃ BỎ, cố ý, không phải chưa làm.** Người dùng chốt phạm vi
 nhánh này đúng bằng bốn thứ: bỏ pet toolbar, click số đo nhập lại, list kích thước, khoá
 trục xyz cho selection nhiều vật (+ phím tắt). Hai tính năng ngoài danh sách đó bị cắt.
