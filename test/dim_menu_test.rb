@@ -265,16 +265,24 @@ check "only Text size, since there is nothing to apply a size to" do
   none.entries == ["Text size >"]
 end
 
-puts "\n--- sizes the same component is already built at ---"
+puts "\n--- Referenced Dimensions, and why it is not here ---"
 
-# "Referenced Dimensions", another block dropped while this file was written. It
-# is the answer to "make this one the same as that one over there" without going
-# to measure it: every instance of every definition sharing this one's DC name is
-# walked and its length along the clicked axis offered, labelled "(in model)".
+# It answered "make this one the same as that one over there" without going to
+# measure it: every instance of every definition sharing this one's DC name walked,
+# and its length along the clicked axis offered, labelled "(in model)".
 #
-# Two instances of ONE definition is the whole point, so the shim had to learn
-# #instances, #parent and a real InstancePath#transformation first -- with the old
-# stub every instance measured the same and the block could never appear.
+# Removed on request, 2026-08-13, with ScalePPTool#referenced_dims and
+# #same_dc_definition. It read well and behaved badly: the sizes it found were
+# whatever the neighbouring instances had been dragged to, so the block filled with
+# values like "~ 592" -- the tilde being SketchUp saying the number does not round
+# cleanly at the model's precision. Nobody picks 592 on purpose, and the saved list
+# is the curated answer to the same question.
+#
+# The fixture stays, because the checks below are only worth anything if they are
+# run against the exact model that used to produce the block: two instances of ONE
+# definition at two different sizes. Nothing appearing on an empty model would prove
+# nothing. This is also why the shim learned #instances, #parent and a real
+# InstancePath#transformation -- kept, since a more faithful shim is not a cost.
 MODEL = Sketchup.active_model
 
 def two_instances(second_scale)
@@ -293,99 +301,58 @@ def two_instances(second_scale)
   [PLUG::ScalePPTool.new(nil), here]
 end
 
-check "the other instance's length is found" do
-  tool, = two_instances(2)
-  tool.referenced_dims("lenx").map(&:to_f).sort == [450.0, 900.0]
+# The fixture is doing real work, so it gets its own check: if two_instances stopped
+# building a second instance at a second size, every check below would pass on an
+# empty model and mean nothing at all.
+check "the fixture really does build two instances at two sizes" do
+  _, here = two_instances(2)
+  others = here.definition.instances
+  others.size == 2 &&
+    others.map { |i| i.transformation.xaxis.length.round(4) }.sort == [1.0, 2.0]
 end
 
-check "the axis clicked is the axis measured" do
-  tool, = two_instances(2)
-  tool.referenced_dims("leny").map(&:to_f).uniq == [300.0]
-end
-
-check "an unknown axis name is not a crash" do
-  tool, = two_instances(2)
-  tool.referenced_dims("lenq").empty?
-end
-
-check "the block appears with its grayed heading" do
+check "the block does not appear, on the model that used to produce it" do
   tool, = two_instances(2)
   reset_favorites!
   m = RecordingMenu.new
   MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
-  at = m.entries.index("Referenced Dimensions")
-  at && m.validations["Referenced Dimensions"].call == MF_GRAYED &&
-    m.entries[at + 1] == "900.0 (in model)"
+  m.entries == ["Open list...", "Text size >"]
 end
 
-# It is the first block when nothing is saved, so its own divider has nothing above
-# it either. Same rule as the fresh-install menu, other branch of the same `if`.
-check "with nothing saved it starts the menu, no divider above it" do
+check "no size is offered from the geometry, on any axis" do
   tool, = two_instances(2)
   reset_favorites!
-  m = RecordingMenu.new
-  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
-  m.entries.first == "Referenced Dimensions"
+  ["lenx", "leny", "lenz"].all? do |axis|
+    m = RecordingMenu.new
+    MENU.build(m, tool, MODEL.selection[0], axis, 450.0)
+    m.labels.none? { |l| l.include?("in model") } &&
+      !m.labels.include?("Referenced Dimensions")
+  end
 end
 
-# The separator below the blocks is drawn from what add_referenced_items reports
-# back, and nothing else notices if that answer is wrong: with no saved block the
-# only "yes" comes from here, so a false would run the actions straight on from the
-# referenced list with no rule between them. Found by mutation -- it survived.
-check "and a divider still comes between it and the actions" do
-  tool, = two_instances(2)
-  reset_favorites!
-  m = RecordingMenu.new
-  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
-  at = m.entries.index("Open list...")
-  at && at > 0 && m.entries[at - 1] == :separator
-end
-
-# And with a saved block above it, the divider is what keeps the two lists of bare
-# lengths from reading as one. 45 is 45 MODEL units -- millimetres -- so it cannot
-# collide with the 450 and 900 inches the geometry is.
-check "with sizes saved above it, a divider separates the two" do
+# And with sizes saved, the menu is the saved block and nothing more -- no second
+# list grafted underneath it.
+check "with sizes saved, only the saved ones are listed" do
   tool, here = two_instances(2)
   reset_favorites!
   good, = FAV.parse("45")
   FAV.add(here, "lenx", good)
   m = RecordingMenu.new
   MENU.build(m, tool, here, "lenx", 450.0)
-  at = m.entries.index("Referenced Dimensions")
-  at && at >= 2 && m.entries[at - 1] == :separator && m.entries[0] != :separator
+  m.entries.size == 4 && m.entries[1] == :separator &&
+    m.labels.none? { |l| l.include?("in model") }
 end
 
-# Offering the size it already is would be a menu entry that does nothing.
-check "the current length is not offered back" do
+# The machinery, not just the menu. A block that cannot be reached but whose code is
+# still there is one call away from coming back, and #add_heading only existed to
+# label it.
+check "referenced_dims and same_dc_definition are gone from the tool" do
   tool, = two_instances(2)
-  reset_favorites!
-  m = RecordingMenu.new
-  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
-  m.labels.none? { |l| l.start_with?("450") && l.include?("in model") }
+  !tool.respond_to?(:referenced_dims) && !tool.respond_to?(:same_dc_definition)
 end
 
-# Nor is one that is already in the saved list right above it.
-#
-# Saved by taking the length back off referenced_dims rather than by parsing
-# "900": DimFavorites.parse reads a bare number in MODEL units, so "900" comes
-# back as 900 mm = 35.4", which could never have matched the 900" the geometry is.
-# The first version of this check tested that unit slip and not the dedup.
-check "a size already saved is not listed twice" do
-  tool, here = two_instances(2)
-  reset_favorites!
-  other = tool.referenced_dims("lenx").find { |value| value.to_f == 900.0 }
-  FAV.add(here, "lenx", [other])
-  m = RecordingMenu.new
-  MENU.build(m, tool, here, "lenx", 450.0)
-  m.labels.none? { |l| l.include?("in model") }
-end
-
-check "one instance on its own gets no block at all" do
-  tool, = two_instances(1)
-  reset_favorites!
-  m = RecordingMenu.new
-  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
-  !m.labels.include?("Referenced Dimensions")
+check "and the menu has no code left to build the block with" do
+  !MENU.respond_to?(:add_referenced_items) && !MENU.respond_to?(:add_heading)
 end
 
 puts "\n--- result ---"

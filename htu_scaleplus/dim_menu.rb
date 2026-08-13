@@ -4,14 +4,11 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   #   45 mm                 <- the saved sizes, checked when one is the current length
   #   200 mm
   #   ---------
-  #   Referenced Dimensions <- grayed heading, only when there are any
-  #   900 mm (in model)     <- sizes this component is already built at elsewhere
-  #   ---------
   #   Open list...          add, delete, delete all -- all in one window
   #   Text size  >          Small / Medium / Large
   #
-  # With nothing saved and nothing referenced, that is the whole menu: Open list...
-  # and Text size, no divider above them.
+  # With nothing saved, that is the whole menu: Open list... and Text size, no
+  # divider above them.
   #
   # One list serves all three axes, but picking a size still applies it to the
   # axis of the dimension that was right-clicked -- which is why the axis is
@@ -21,12 +18,11 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   # does each job better, because a native menu closes on the first pick and so
   # every added or deleted value cost a fresh trip through the menu.
   #
-  # Three of the original's items are gone by request, not by accident:
+  # Four of the original's items are gone by request, not by accident:
   #
   #   "Favorite Dimensions" -- a grayed heading over the first block. The block is
   #   the top of the menu and the sizes are what the menu is for, so the label was
-  #   an unclickable row explaining the obvious. "Referenced Dimensions" stays,
-  #   because it is what tells the second block apart from the first.
+  #   an unclickable row explaining the obvious.
   #
   #   "Show Manager" -- opened the old Vue dimension dialog. "Open list..." above
   #   it does the same job in a window built for it. Nothing else opens DimsUI now,
@@ -35,26 +31,29 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   #
   #   The half and double suggestions -- "225 (x0.5)" and "900 (x2.0)", shown only
   #   while nothing was saved. They were a multiplication offered as a size, which
-  #   is what dragging a grip already does. The cost is real and was weighed: this
-  #   was the ONLY thing the menu offered on a fresh install, so a first right-click
-  #   now has no size on it until one is saved through Open list...
+  #   is what dragging a grip already does. Little was lost: a typed size joins the
+  #   saved list on its own, so the list fills from the first resize -- only the very
+  #   first right-click, before anything has been resized, has nothing on it.
   #
-  # Everything else here is Curic Scale++ 1.1.2's own menu, including Referenced
-  # Dimensions, which was dropped while this file was being written and is back.
+  #   "Referenced Dimensions" and its "(in model)" sizes -- the lengths every other
+  #   instance of this definition is already built at. It read well in principle and
+  #   badly in practice: the sizes on it are whatever the neighbours happen to have
+  #   been dragged to, so the block filled up with values like "~ 592" -- the tilde
+  #   being SketchUp saying the number does not even round cleanly. Nobody picks 592
+  #   on purpose. The saved list is the curated answer to the same question, and
+  #   ScalePPTool#referenced_dims and #same_dc_definition went with it.
+  #
+  # Everything else here is Curic Scale++ 1.1.2's own menu.
   module DimMenu
     def self.build(menu, tool, object, axis, length)
       values = DimFavorites.list(object, axis)
 
       if object
         add_value_items(menu, tool, axis, length, values)
-        listed = !values.empty?
-        if add_referenced_items(menu, tool, axis, length, values, listed)
-          listed = true
-        end
-        # A separator divides, so it needs a block on both sides. Since the
-        # suggestions went there is nothing above it on a fresh install, and a menu
-        # that opens with a horizontal rule reads as an item that failed to draw.
-        if listed
+        # A separator divides, so it needs a block on both sides. Nothing precedes
+        # it on a fresh install now, and a menu that opens with a horizontal rule
+        # reads as an item that failed to draw.
+        unless values.empty?
           menu.add_separator
         end
         menu.add_item("Open list...") { defer { DimAddDialog.show(object, axis) } }
@@ -73,41 +72,9 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       end
     end
 
-    # Sizes the same component is already built at elsewhere in the model. Minus
-    # the saved ones, which are listed above, and minus the current length, which
-    # would be a no-op.
-    #
-    # Returns whether it put anything on the menu, so the caller knows whether
-    # there is a block for the separator below to divide. `divide` is the same
-    # question asked of what came before this block.
-    def self.add_referenced_items(menu, tool, axis, length, values, divide = true)
-      unless tool.respond_to?(:referenced_dims)
-        return false
-      end
-      lengths = tool.referenced_dims(axis).to_a - values.to_a
-      lengths = lengths.reject { |value| value == length }
-      if lengths.empty?
-        return false
-      end
-      if divide
-        menu.add_separator
-      end
-      add_heading(menu, "Referenced Dimensions")
-      lengths.each do |value|
-        menu.add_item("#{value} (in model)") { tool.apply_dim_value(axis, value) }
-      end
-      true
-    end
-
-    # A grayed item standing in for a group label, which is how the original
-    # separated the blocks. Only the referenced one uses it now: it comes after a
-    # list of saved sizes that looks exactly like it, so something has to say
-    # where one ends and the other starts.
-    def self.add_heading(menu, text)
-      item = menu.add_item(text) {}
-      menu.set_validation_proc(item) { MF_GRAYED }
-      item
-    end
+    # #add_heading went with the referenced block. It drew a grayed, unclickable row
+    # standing in for a group label, and with one block left there are no groups to
+    # label -- the sizes start the menu and a separator ends them.
 
     def self.add_text_size_submenu(menu)
       submenu = menu.add_submenu("Text size")

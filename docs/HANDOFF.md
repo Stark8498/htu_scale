@@ -117,15 +117,12 @@ SketchUp, còn transformation đặt từ Ruby thì mọi mask đều đổi đ�
 ```
 45 / 200 / 400          <- tick khi trùng kích thước hiện tại
 --------
-Referenced Dimensions   <- heading xám, chỉ hiện khi tìm được
-900 (in model)          <- kích thước instance khác cùng definition đang có
---------
 Open list...            <- mở cửa sổ Dimensions: thêm, xoá từng cái, xoá hết
 Text size >             Small / Medium / Large
 ```
 
-Khi **chưa lưu gì và không có kích thước tham chiếu**, menu chỉ còn đúng hai dòng
-cuối — `Open list...` và `Text size` — **không có gạch ngang** ở trên chúng.
+Khi **chưa lưu gì**, menu chỉ còn đúng hai dòng cuối — `Open list...` và
+`Text size` — **không có gạch ngang** ở trên chúng.
 
 **Bốn thứ trong menu này là của Scale++ gốc và từng bị mất** trong lúc viết
 `dim_menu.rb`: hai gợi ý nửa/đôi, hai heading xám, `Referenced Dimensions`, và
@@ -133,13 +130,13 @@ cuối — `Open list...` và `Text size` — **không có gạch ngang** ở tr
 **toàn bộ** những gì menu có, mất nó thì chuột phải ra một menu không có kích thước
 nào để bấm. Cả bốn đã được trả lại trong lần audit trước release.
 
-**Rồi ba trong số đó bị bỏ lại, 2026-08-13, theo yêu cầu — quyết định, không phải
-lỗi.** Khác hẳn lần trước: lần trước là mất mà không ai biết, lần này là chọn.
+**Rồi CẢ BỐN bị bỏ lại, 2026-08-13, theo yêu cầu — quyết định, không phải lỗi.**
+Khác hẳn lần trước: lần trước là mất mà không ai biết, lần này là chọn. Menu cuối
+cùng chỉ còn: danh sách đã lưu, `Open list...`, `Text size`.
 
 - `Favorite Dimensions` — heading xám nằm trên khối đầu tiên. Khối đó ở ngay đỉnh
   menu và các kích thước chính là *lý do* menu tồn tại, nên cái label là một dòng
-  không bấm được để giải thích điều đã rõ. `Referenced Dimensions` **giữ lại**: nó
-  đứng sau một danh sách trông y hệt nó, phải có gì đó phân ranh hai khối.
+  không bấm được để giải thích điều đã rõ.
 - `Show Manager` — mở dialog Vue `DimsUI` cũ. `Open list...` ngay trên nó làm đúng
   việc đó trong một cửa sổ viết riêng cho việc đó. **Hệ quả cần biết:** giờ không còn
   lối nào mở `DimsUI`, nên 11 file đó ship mà không ai tới được, và các lệnh refresh
@@ -155,25 +152,46 @@ lỗi.** Khác hẳn lần trước: lần trước là mất mà không ai bi�
   giá trị. Tôi đã nói với người dùng là họ sẽ phải tự vào `Open list...` lưu tay
   trước; **điều đó sai.**
 
-Kéo theo một thay đổi không ai yêu cầu nhưng là hệ quả trực tiếp: **gạch ngang giờ có
-điều kiện**. Gạch ngang là để *chia*, nên nó cần có khối ở cả hai bên; mất khối gợi ý
-thì máy mới cài không còn gì ở trên nó, và một menu mở ra bằng một đường kẻ ngang đọc
-như một mục vẽ lỗi. `add_referenced_items` giờ **trả về** nó có thêm gì vào menu hay
-không, và nhận thêm tham số `divide` — chính là câu hỏi đó hỏi về khối phía trước nó.
+- **`Referenced Dimensions` + các dòng `(in model)`** — kích thước mà các instance
+  khác của cùng definition đang có. Nghe hay, dùng thì dở, và **chính ảnh chụp của
+  người dùng là bằng chứng**: khối đó hiện ra `~ 592 (in model)`. Dấu `~` là SketchUp
+  nói con số **không tròn được** ở độ chính xác của model — nghĩa là cái vật bên cạnh
+  đã bị kéo grip tự do, và menu đem đúng con số rác đó ra mời. Không ai chọn 592 có
+  chủ đích. Danh sách đã lưu là câu trả lời *có chọn lọc* cho đúng câu hỏi đó.
+  Xoá kèm: `ScalePPTool#referenced_dims` (26 dòng), `#same_dc_definition` (17 dòng),
+  `DimMenu.add_referenced_items` và `DimMenu.add_heading`.
 
-Cả ba đều bị chốt bằng check trong `dim_menu_test.rb`. Mutation test 6 mutation, và
-**một cái sống sót**: cho `add_referenced_items` trả `false` dù nó vừa thêm mục. Không
-check nào thấy — khi chưa lưu gì thì đó là tiếng "có" duy nhất, nên các mục hành động
-sẽ chạy liền sau danh sách tham chiếu mà không có đường kẻ. Đã thêm check bịt lại.
-Cũng phải chú ý: check duy nhất chứng minh **bấm một kích thước thì vật đổi kích
-thước** nằm trên chính cái gợi ý nửa/đôi — xoá gợi ý mà không nhìn thì mất luôn cả
-đường `apply_dim_value`. Đã chuyển check đó sang một kích thước đã lưu.
+Kéo theo hai thứ không ai yêu cầu nhưng là hệ quả trực tiếp:
 
-`Referenced Dimensions` = `ScalePPTool#referenced_dims(axis)`: đi qua mọi instance của
-mọi definition trùng tên `dynamic_attributes` với definition đang chọn, đo cạnh theo
-đúng trục vừa bấm. Trừ đi các giá trị đã lưu (đã liệt kê ở trên) và trừ chính kích
-thước hiện tại (bấm vào sẽ không làm gì). Group thường không có tên DC nên chỉ soi
-definition của chính nó — một group đứng một mình thì khối này không hiện.
+**Gạch ngang có điều kiện.** Gạch ngang là để *chia*, nên nó cần có khối ở cả hai bên;
+mất khối gợi ý thì máy mới cài không còn gì ở trên nó, và một menu mở ra bằng một
+đường kẻ ngang đọc như một mục vẽ lỗi. Giờ chỉ còn một điều kiện duy nhất —
+`unless values.empty?` — vì chỉ còn một khối. (`add_referenced_items` từng phải *trả
+về* nó có thêm gì hay không, và nhận cờ `divide`; cả cơ chế đó đi theo nó.)
+
+**`Utils#definition_paths` và `#get_path` giờ không còn ai gọi.** Đó là utility của
+plugin gốc, không phải thứ thêm vào cho tính năng này, nên **để lại** giống
+`listbox.rb` — xem §8. `utils.rb` có **hai bản** của cặp này (dòng ~82/90 và ~330/338),
+cũng là chuyện của bản gốc.
+
+Cũng phải chú ý, và đây là bẫy đã thật sự sập một lần: check duy nhất chứng minh **bấm
+một kích thước thì vật đổi kích thước** nằm trên chính cái gợi ý nửa/đôi — xoá gợi ý
+mà không nhìn thì mất luôn cả đường `apply_dim_value`. Đã chuyển sang kích thước đã
+lưu trước khi xoá.
+
+Cả bốn đều bị chốt bằng check trong `dim_menu_test.rb`, **và chốt cả phần code chứ
+không chỉ phần menu**: một khối không tới được nhưng code vẫn còn thì chỉ cách một lời
+gọi là quay lại. Có check `!tool.respond_to?(:referenced_dims)` và
+`!MENU.respond_to?(:add_heading)`.
+
+Fixture `two_instances` **giữ lại và có check riêng cho chính nó**: các check "không
+hiện gì" chỉ có giá trị nếu chạy trên đúng cái model từng sinh ra khối đó — hai
+instance của MỘT definition ở hai kích thước. Không hiện gì trên model rỗng thì chứng
+minh được số không. Mutation test đã xác nhận: làm hỏng fixture (bỏ scale instance thứ
+hai) là check đó đỏ. Cũng vì vậy mà **fidelity của shim** (`#instances`, `#parent`,
+`InstancePath#transformation`) **giữ nguyên** — shim đúng hơn thì không phải là chi phí.
+
+Mutation test: 6 mutation, **6 đỏ**, không cái nào sống sót.
 
 **Một danh sách chung cho cả ba trục**. Trục vẫn được truyền xuyên suốt vì chọn một
 kích thước thì phải áp vào đúng trục vừa bấm — chỉ chỗ *lưu* là chung.
@@ -601,7 +619,10 @@ Những chỗ đã phải sửa vì lý do đó:
   Một cái bẫy ở đây: back-link phải làm ở **cả hai phía**. Lúc đầu chỉ `definition` (reader)
   gọi `add_instance`, nên một test gán definition dùng chung rồi không đọc lại thì
   `instances` vẫn rỗng — hai instance mà đi qua chỉ thấy một. Cả reader lẫn writer đều
-  đăng ký, và mutation test có riêng một mục cho chuyện đó
+  đăng ký, và mutation test có riêng một mục cho chuyện đó.
+  **`Referenced Dimensions` đã bị xoá (§4) nhưng ba thứ này GIỮ LẠI.** Một shim đúng
+  hơn không phải chi phí, và fixture `two_instances` vẫn cần chúng: các check "khối đó
+  không hiện" chỉ có giá trị khi chạy trên đúng model từng sinh ra nó
 
 Nguyên tắc: nếu một lỗi thật lọt qua được shim, sửa shim trước, rồi mới viết test.
 
@@ -857,6 +878,12 @@ gate vẫn xanh. Sửa thì nhiều khả năng là `options` trực tiếp, nh�
 
 **`overlay.rb:70`** — `fit_to_length = false` là công tắc tắt cứng, cả khối dưới nó
 là code chết. Chưa rõ nó từng làm gì.
+
+**`Utils#definition_paths` / `#get_path`** — từ 2026-08-13 không còn ai gọi:
+`referenced_dims` là caller duy nhất và đã xoá cùng `Referenced Dimensions` (§4). Để
+lại vì đó là utility của bản gốc, cùng chính sách với `listbox.rb`. Đáng chú ý:
+`utils.rb` có **hai bản trùng nhau** của cặp này (dòng ~82/90 trong một module, ~330/338
+trong module kia) — chuyện của bản gốc, không phải do lần xoá này.
 
 **`dims.rb` / `DimsUI`** — dialog Vue cũ, vẫn nạp và `observer.rb` vẫn gọi
 `DimsUI.dialog`. Từ 2026-08-13 **không còn lối vào nào**: `Show Manager` là mục cuối
