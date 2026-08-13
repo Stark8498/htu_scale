@@ -233,11 +233,47 @@ end
         end
       end
       def onToolStateChanged(_tools, tool_name, _tool_id, tool_state)
+        tool_name = fix_mac_tool_name(tool_name)
+        # Above the overlay check, for the same reason the GroupLock call in
+        # #tool_changed is: the mask governs SketchUp's OWN handles, and none of the
+        # rest of the mask machinery is overlay-gated either -- the six toolbar
+        # buttons write it whether the overlay is on or off.
+        scale_finished(tool_name, tool_state)
         unless PLUGIN.active_overlay
           return
         end
-        tool_name = fix_mac_tool_name(tool_name)
         PLUGIN.active_overlay.onToolStateChanged(tool_name, tool_state)
+      end
+      # A grip has just been let go of.
+      #
+      # Keyed off the 1 -> 0 transition, not off state 0 on its own: SketchUp also
+      # reports 0 when the Scale tool merely becomes active, and
+      # PLUGIN.reassert_behavior can re-pick the tool, which brings us straight back
+      # here with another 0. Requiring a 1 first makes that second pass a no-op
+      # instead of a loop.
+      #
+      # Deferred a tick like every other model edit made from an observer callback:
+      # this one lands immediately after the Scale tool's own operation commits.
+      def scale_finished(tool_name, tool_state)
+        unless tool_name == "ScaleTool"
+          return false
+        end
+        if tool_state == 1
+          @dragging = true
+          return false
+        end
+        unless @dragging
+          return false
+        end
+        @dragging = false
+        id = UI.start_timer(0, false) do
+          UI.stop_timer(id)
+          PLUGIN.reassert_behavior
+        end
+        true
+      rescue StandardError => e
+        p(e)
+        false
       end
       def fix_mac_tool_name(tool_name)
         if tool_name == "eTool"

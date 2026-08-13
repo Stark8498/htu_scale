@@ -304,6 +304,166 @@ check "nothing is applied inline, before that tick" do
   mask_of(group) == ALL
 end
 
+puts "\n--- after a scale drag ---"
+
+# The report this section exists for: pick XYZ, the six grips are right; drag one grip,
+# let go, and all twenty-six are back while the toolbar button still reads XYZ.
+#
+# #apply_behavior only ever ran on a selection CHANGE, and letting go of a grip is not
+# one -- the same object stays selected, so nothing ever looked at the mask again.
+def tools_observer
+  PLUG::ScalePP2Observer::ScalePP2_ToolsOb.new(PLUG::ScalePP2Observer.new)
+end
+
+# One drag, through the observer SketchUp actually calls: state 1 when the grip is
+# grabbed, 0 when it is let go. The same observer for both halves, because the 1 is
+# what arms the 0 -- a fresh one for the release would see a release out of nowhere,
+# which is the case the next checks pin as a no-op.
+def drag(observer = tools_observer)
+  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 1)
+  at = $SU_TIMERS.size
+  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+  fired = $SU_TIMERS[at..-1].to_a
+  fired.each { |t| t[:proc].call }
+  fired
+end
+
+check "a mask lost during the drag is put back on release" do
+  self.stored = XYZ
+  group = component(XYZ)
+  select(group)
+  group.definition.behavior.no_scale_mask = ALL   # what the drag left behind
+  drag
+  mask_of(group) == XYZ
+end
+
+# The likeliest way it goes, and the reason the repair reads `object.definition` fresh
+# instead of remembering one: transforming a group whose definition is shared makes
+# that definition unique, and a made-unique definition carries default behavior. The
+# mask was never cleared -- the object is simply holding a different definition now.
+# Indistinguishable from here, and it has to be, because both must be repaired.
+check "a definition swapped out mid-drag is repaired too" do
+  self.stored = XYZ
+  group = component(XYZ)
+  select(group)
+  group.definition = Sketchup::ComponentDefinition.new   # what make_unique leaves
+  lost = mask_of(group)
+  drag
+  lost == ALL && mask_of(group) == XYZ
+end
+
+# Writing the mask is only half the job. SketchUp's Scale tool does not re-read
+# no_scale_mask while it stays the active tool -- the same wall #set_behavior hit, and
+# the reason a bare send_action is not enough.
+check "and the Scale tool is sent out and back so it rereads the mask" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  $SU_CALLS[:select_tool].clear
+  $SU_CALLS[:send_action].clear
+  drag
+  $SU_CALLS[:select_tool].include?(nil) &&
+    $SU_CALLS[:send_action].include?("selectScaleTool:")
+end
+
+# Positive control, and the reason the repair is conditional. Every check above passes
+# just as well if this fires on every release -- and a tool re-pick after every single
+# drag would be felt by the user. It has to be free when nothing drifted.
+check "a drag that lost nothing costs no re-pick and no operation" do
+  self.stored = XYZ
+  select(component(XYZ))
+  $SU_CALLS[:select_tool].clear
+  $SU_CALLS[:send_action].clear
+  $SU_CALLS[:start_operation].clear
+  drag
+  $SU_CALLS[:select_tool].empty? && $SU_CALLS[:send_action].empty? &&
+    $SU_CALLS[:start_operation].empty?
+end
+
+# SketchUp reports state 0 for the Scale tool merely becoming active as well. Repairing
+# there would mean a re-pick on every activation -- and the re-pick arrives here as
+# another state 0, which is a loop that never settles.
+check "a release with no drag before it does nothing at all" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  observer = tools_observer
+  at = $SU_TIMERS.size
+  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+  $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
+  mask_of(group) == ALL
+end
+
+# The re-pick is itself announced as another state 0, so the repair has to settle: a
+# second pass must find nothing left to do rather than buy a second re-pick. Two
+# releases here, not because SketchUp sends two, but because that is what the re-pick
+# coming back looks like from in here.
+check "the repair settles -- a second release buys no second re-pick" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  observer = tools_observer
+  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 1)
+  $SU_CALLS[:send_action].clear
+  2.times do
+    at = $SU_TIMERS.size
+    observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+    $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
+  end
+  mask_of(group) == XYZ &&
+    $SU_CALLS[:send_action].count("selectScaleTool:") == 1
+end
+
+# And the arming has to be cleared by the release it belongs to. Left set, every later
+# state 0 -- the Scale tool merely becoming active is one -- goes looking for something
+# to repair. The check above cannot see that: by then the mask is already right, so a
+# second repair is free and leaves no trace. This one makes the mask drift again with
+# no drag to explain it, which is the case that must be left alone.
+check "and the arming does not survive the drag it belongs to" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  observer = tools_observer
+  drag(observer)
+  group.definition.behavior.no_scale_mask = ALL
+  at = $SU_TIMERS.size
+  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+  $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
+  mask_of(group) == ALL
+end
+
+# Same rule as everywhere else the model gets edited from an observer callback, and it
+# matters more here than most: this one lands immediately after the Scale tool's own
+# operation commits.
+check "nothing is repaired inline, before the tick" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  observer = tools_observer
+  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 1)
+  at = $SU_TIMERS.size
+  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+  mask_of(group) == ALL && $SU_TIMERS.size > at
+end
+
+# A selection of several objects has no definition of its own to carry a mask, so for
+# it the repair is the wrapper, not the write: masks written onto the objects leave the
+# union cage ungoverned, which is the whole reason GroupLock exists. A wrapper can go
+# missing mid-drag -- an undo past the wrap puts the objects back loose.
+check "a multi-object selection is re-wrapped, not written to one by one" do
+  self.stored = XYZ
+  a = component(ALL)
+  b = component(ALL)
+  MODEL.entities.add_entity(a)
+  MODEL.entities.add_entity(b)
+  select(a, b)
+  drag
+  wrapper = PLUG::GroupLock.temp_group
+  ok = !wrapper.nil? && mask_of(wrapper) == XYZ && MODEL.selection.to_a == [wrapper]
+  PLUG::GroupLock.unwrap(MODEL)
+  ok
+end
+
 puts "\n--- result ---"
 if $fails.zero?
   puts "PASS — the scale mode is remembered and follows the selection"

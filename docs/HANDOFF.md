@@ -374,6 +374,49 @@ sửa model, và một sửa đổi từ trong observer callback có thể rơi 
 ra callback đó. `onPreSaveModel` thì chạy **inline** — save xảy ra ngay sau đó, timer sẽ
 nổ quá muộn.
 
+**Mask sống sót qua một cú kéo** — `main.rb#reassert_behavior`, gọi từ
+`ScalePP2_ToolsOb#scale_finished`. Báo lỗi (13/08/2026, kèm hai ảnh): bấm XYZ thì 6 grip
+đúng, **kéo một grip rồi buông thì 26 grip quay lại** trong khi nút trên toolbar vẫn
+đang là XYZ.
+
+Nguyên nhân cấu trúc: `apply_behavior` **chỉ chạy khi ĐỔI SELECTION**, và buông grip
+không phải đổi selection — vẫn đúng vật đó đang được chọn, nên **không có gì đọc lại
+mask lần nữa**. Điều đó ổn miễn là scale không đụng tới mask, mà nó có đụng: mask nằm
+trên **ComponentDefinition**, và một cú transform lên group có definition dùng chung sẽ
+`make_unique` — vật đi ra khỏi cú kéo với một definition **khác**, mang behavior mặc
+định, mask 0.
+
+Bản sửa **cố tình không phân biệt** mask bị xoá với definition bị thay: từ chỗ này hai
+thứ đó trông y như nhau, và `apply_behavior` đọc `object.definition` **mới mỗi lần gọi**
+nên vá cả hai như nhau. Ba việc, đúng thứ tự:
+
+1. `GroupLock.wrap(model)` trước — selection nhiều vật không có definition riêng để đỡ
+   mask, nên với nó thuốc là **cái wrapper**, không phải nước ghi mask. Ghi mask lên
+   từng vật để cái lồng hợp nhất không ai chi phối chính là lỗi mà `GroupLock` sinh ra
+   để bịt. Không có gì xảy ra nếu wrapper vẫn còn: `wrappable?` từ chối khi đã có một
+   cái sống, khi dưới 2 vật, và khi đang ở chế độ all.
+2. `apply_behavior(model.selection)`.
+3. **Chỉ khi** bước 2 trả về khác 0 thì mới `repick_scale_tool` — vì Scale tool không
+   đọc lại mask khi nó vẫn là tool đang chạy (đúng bức tường ở đoạn trên). `changed == 0`
+   là trường hợp của **mọi** cú kéo sau khi bản sửa này đúng, và re-pick sau từng cú kéo
+   thì người dùng cảm thấy được.
+
+Bắt theo **chuyển 1 → 0**, không theo state 0 đứng một mình: SketchUp báo state 0 cả khi
+Scale tool **chỉ vừa được chọn**, và bản thân cú re-pick cũng về đây dưới dạng một state
+0 nữa — thiếu cờ `@dragging` thì đó là một vòng không bao giờ đứng lại. Cờ được xoá ngay
+bởi chính cú buông sinh ra nó (có test riêng: mutation "arming không bao giờ được xoá"
+sống sót cho tới khi thêm check đó).
+
+Đặt **trên** chỗ kiểm tra overlay trong `onToolStateChanged`, cùng lý do với
+`GroupLock.tool_changed`: mask chi phối grip của **chính SketchUp**, và không chỗ nào
+khác trong bộ máy mask bị chặn bởi overlay — 6 nút trên menu ghi mask bất kể overlay bật
+hay tắt. Có mutation khoá điều này (dời xuống dưới cổng overlay → 6 check đỏ).
+
+**Chưa chạy trong SketchUp thật.** 9 check trong `behavior_test.rb` và 8 mutation đều
+trên shim, nên chúng chứng minh *logic* đúng chứ **không** chứng minh SketchUp mất mask
+theo đúng cách đã đoán. `dev/htu_mask_probe.rb` là chỗ xác nhận: cột `mask=` phải tụt
+về 0 lúc buông rồi **quay lại 120 một tick sau**, `defid=` nói cách nào đã xảy ra.
+
 **Orbit / pan / zoom giữa lúc scale không mất gì** — `ScalePP2_ToolsOb::NAVIGATION`
 trong `observer.rb`. SketchUp cài cả ba thứ này thành **tool change**: giữ chuột giữa là
 active tool thành `CameraOrbitTool`, shift+giữa thành `CameraPanTool`, thả ra thì trả
@@ -896,6 +939,15 @@ chỉ SketchUp trả lời được: (1) group tạm mask 120 có thật sự ra
 `send_action("selectScaleTool:")` một mình **không đủ**; (3) chuỗi undo sau khi scale xong trông thế nào —
 `sweep` là lưới an toàn cho việc đó, nhưng số lần bấm Ctrl+Z người dùng phải chịu thì
 chưa ai đếm. Chạy `HTU_ScalePlusReload.run` rồi chọn 2 group, bật nút XYZ, bấm S.
+
+**`reassert_behavior` chưa chạy thử trong SketchUp thật** (thêm 13/08/2026). Nó vá đúng
+cái người dùng nhìn thấy — kéo xong 26 grip quay lại — nhưng cả 9 check và 8 mutation đều
+trên shim, nên chúng khoá được *logic vá* chứ không xác nhận được **SketchUp mất mask
+theo cách nào**. Hai điều chỉ SketchUp trả lời: (1) mask có thật sự về 0 sau một cú kéo,
+và vì `make_unique` hay vì bị xoá tại chỗ (`defid=` trong `dev/htu_mask_probe.rb` phân
+biệt hai cái); (2) cú re-pick ngay sau khi buông có làm chuỗi undo dài thêm một bước hay
+không — nếu có thì người dùng phải bấm Ctrl+Z hai lần cho một cú scale, và lúc đó phải
+tính cách vá mask **không** đi qua `repick_scale_tool`.
 
 **Rác còn trong .rbz** — `radial_menu/` (18 file) và `radial_menu.rb`, không file nào
 được require. **Còn `lib/` và `resources/` đã ra khỏi archive** từ 2026-08-13: chúng

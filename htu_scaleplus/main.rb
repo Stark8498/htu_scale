@@ -84,6 +84,55 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
     p(e)
     0
   end
+  # Puts the chosen mode back after a scale drag, if the drag lost it.
+  #
+  # #apply_behavior only ever ran on a selection CHANGE, and letting go of a grip is
+  # not one: the same object stays selected, so nothing looked at the mask again. That
+  # was fine as long as scaling left the mask alone, and it does not. The mask lives on
+  # a ComponentDefinition, and a scale can hand the object a different definition --
+  # transforming a group whose definition is shared makes it unique, and a
+  # made-unique definition carries default behavior, mask 0. Twenty-six handles come
+  # back while the toolbar button still reads XYZ, which is exactly what "khóa trục
+  # xyz đúng, kéo xong số điểm lại nhiều" is.
+  #
+  # Deliberately written so it does not matter WHICH way the mask was lost, because
+  # that is not observable from here -- a cleared mask and a swapped definition look
+  # identical to anything downstream. #apply_behavior reads `object.definition` fresh
+  # every call, so it repairs both alike.
+  #
+  # Costs nothing when nothing drifted, which is every drag once this is right:
+  # #apply_behavior returns 0 when the selection already carries the mode, and only a
+  # non-zero count buys a tool re-pick. A re-pick on every grip release would be felt.
+  def self.reassert_behavior
+    model = Sketchup.active_model
+    unless model && model.valid?
+      return false
+    end
+
+    # A selection of several objects has no definition of its own to carry a mask, so
+    # for it the repair is the wrapper, not the write -- writing the mask onto each
+    # object again would leave the union cage ungoverned, which is the whole reason
+    # GroupLock exists. Nothing happens here unless a wrapper is genuinely missing:
+    # #wrappable? refuses while one is live, below two objects, and in all-handles
+    # mode. #wrap re-picks the tool itself.
+    if GroupLock.wrap(model)
+      return true
+    end
+
+    changed = apply_behavior(model.selection)
+    if changed.zero?
+      return false
+    end
+
+    # The mask was just rewritten under a Scale tool that has already read the old
+    # one, and it does not look again while it stays the active tool. Same reason
+    # #set_behavior cannot get away with a bare send_action.
+    repick_scale_tool
+    true
+  rescue StandardError => e
+    p(e)
+    false
+  end
   def self.toggle_dimensions
     Sketchup.write_default(PLUGIN_NAME, "show_dim", !show_dim?)
   end
