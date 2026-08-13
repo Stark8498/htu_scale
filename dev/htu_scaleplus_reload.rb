@@ -188,8 +188,14 @@ module HTU_ScalePlusReload
 
     puts "== HTU ScalePlus reloaded =="
     puts "root: #{root}"
+    # equal?, not ==. #sub_files returns the FALLBACK_FILES object itself when it really
+    # falls back, and a fresh Array when it parsed loader.rb -- but right now the parse
+    # produces a list with exactly the same twelve names in the same order, so == said
+    # "KHONG doc duoc" on a read that had worked perfectly. That false alarm cost a
+    # detour: it reads as "the reloader is broken, the file order may be wrong", which is
+    # the scariest thing this tool can say, and it was saying it on every single run.
     puts "thu tu: #{names.length} file tu loader.rb" +
-         (names == FALLBACK_FILES ? " (KHONG doc duoc, dung FALLBACK_FILES)" : "")
+         (names.equal?(FALLBACK_FILES) ? " (KHONG doc duoc, dung FALLBACK_FILES)" : "")
     puts "sync: #{copied} file(s) tu #{SOURCE_ROOT}" if copied.positive?
     # The MD5 is here to make a stale copy obvious, so say outright when the loaded
     # file differs from the repo instead of leaving two hex strings to be compared

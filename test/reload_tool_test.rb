@@ -135,7 +135,20 @@ end
 
 check "an unreadable loader.rb falls back rather than loading nothing" do
   Dir.mktmpdir("htu_reload_empty") do |dir|
-    with_source_root(nil) { R.sub_files(dir) == R::FALLBACK_FILES }
+    with_source_root(nil) { R.sub_files(dir).equal?(R::FALLBACK_FILES) }
+  end
+end
+
+# #run reports "KHONG doc duoc, dung FALLBACK_FILES" -- the scariest thing this tool can
+# say, because it means the file ORDER may be wrong. It was saying it on every run: the
+# parse currently yields exactly the same twelve names as the fallback, so a == told them
+# apart wrongly. Identity is what separates "parsed" from "gave up", and the two checks
+# above rely on it, so this pins that they CAN be told apart at all.
+check "a successful parse is a different object from the fallback" do
+  body = R::FALLBACK_FILES.reject { |n| n == "loader" }
+                          .map { |n| "Sketchup.require \"\#{PATH}/#{n}\"\n" }.join
+  fake_loader(body) do |names|
+    names == R::FALLBACK_FILES && !names.equal?(R::FALLBACK_FILES)
   end
 end
 

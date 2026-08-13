@@ -33,10 +33,14 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
         return
       end
       # The first safe moment after a grip is let go, and the reason the repair is not
-      # done at the release itself: SketchUp's Scale operation is still open then, and
-      # opening one inside it crashed SketchUp on every drag. A mouse move is never
+      # triggered at the release itself: SketchUp's Scale operation is still open then,
+      # and opening one inside it crashed SketchUp on every drag. A mouse move is never
       # delivered mid-commit. Below the navigation guard on purpose -- the repair can
       # re-pick the Scale tool, and doing that during an orbit would abort the orbit.
+      #
+      # Triggered, not performed: this is an overlay callback, and SketchUp forbids model
+      # changes in one outright ("no model changes should be made during overlay
+      # callbacks"). The call below only sets a timer going.
       PLUGIN.reassert_behavior_if_pending
       dispatch_mouse(flags, x, y, view)
     end

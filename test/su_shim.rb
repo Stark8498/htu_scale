@@ -10,6 +10,8 @@
 
 $SU_CALLS = Hash.new { |h, k| h[k] = [] }
 $SU_TIMERS = []
+# Set by a test around a call into an overlay callback. See Behavior#no_scale_mask=.
+$SU_IN_OVERLAY_CALLBACK = false
 
 module Sketchup
   class Entity
@@ -70,7 +72,23 @@ module Sketchup
     attr_accessor :mask
     def initialize; @mask = 0; end
     def no_scale_mask?; @mask; end
-    def no_scale_mask=(m); @mask = m; end
+    # SketchUp REFUSES a model change made from inside an overlay callback. Measured in
+    # SketchUp 2026: the mask repair wrote the mask from ScalePP2Overlay#onMouseMove and
+    # got back
+    #
+    #   RuntimeError: no model changes should be made during overlay callbacks
+    #
+    # which #reassert_behavior's own rescue swallowed, so the only visible symptom was
+    # that the grips stayed wrong. Modelled here so a test catches it instead of a user:
+    # a test that drives an overlay callback sets $SU_IN_OVERLAY_CALLBACK around it, and
+    # anything that writes the model in there raises exactly as SketchUp would.
+    def no_scale_mask=(m)
+      if $SU_IN_OVERLAY_CALLBACK
+        raise "no model changes should be made during overlay callbacks"
+      end
+
+      @mask = m
+    end
   end
   class ComponentDefinition < Drawingelement
     # Named, because a Dynamic Component's formulas refer to components BY NAME and a

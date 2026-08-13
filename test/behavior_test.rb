@@ -344,12 +344,27 @@ OVERLAY.instance_variable_set(:@tools, [])
 $moves = 0
 def mouse_moved
   $moves += 1
+  # SketchUp forbids model changes inside an overlay callback and raises if one is
+  # attempted. The shim enforces it while this flag is set, so a repair that writes from
+  # in here fails a test rather than failing silently in front of a user -- which is
+  # exactly how it got shipped once.
+  $SU_IN_OVERLAY_CALLBACK = true
   OVERLAY.onMouseMove(0, 40 + $moves, 50, MODEL.active_view)
+ensure
+  $SU_IN_OVERLAY_CALLBACK = false
+end
+
+# The mouse move schedules; the timer does the work. Two steps because an overlay
+# callback may not touch the model, so the move can only ever hand the job on.
+def fire_timers(from)
+  $SU_TIMERS[from..-1].to_a.each { |t| t[:proc].call }
 end
 
 def drag(observer = tools_observer)
   release(observer)
+  at = $SU_TIMERS.size
   mouse_moved
+  fire_timers(at)
   observer
 end
 
@@ -419,7 +434,9 @@ check "a release with no drag before it does nothing at all" do
   group = component(ALL)
   select(group)
   tools_observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+  at = $SU_TIMERS.size
   mouse_moved
+  fire_timers(at)
   mask_of(group) == ALL
 end
 
@@ -452,7 +469,9 @@ check "and the arming does not survive the drag it belongs to" do
   # not re-arm: nothing was dragged. Without this line the check cannot see a @dragging
   # that is never cleared, which is how that mutation survived a round.
   observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+  at = $SU_TIMERS.size
   mouse_moved
+  fire_timers(at)
   mask_of(group) == ALL
 end
 
@@ -502,14 +521,38 @@ check "the release itself touches nothing -- no operation, no tool, no timer" do
     $SU_CALLS[:send_action].empty? && $SU_TIMERS.size == at
 end
 
-check "and the next mouse move is what repairs it" do
+check "the next mouse move triggers it" do
   self.stored = XYZ
   group = component(ALL)
   select(group)
   release
   before = mask_of(group)
+  at = $SU_TIMERS.size
   mouse_moved
+  fire_timers(at)
   before == ALL && mask_of(group) == XYZ
+end
+
+# The second failed attempt, and the second thing SketchUp had to say out loud:
+#
+#   RuntimeError: no model changes should be made during overlay callbacks
+#
+# An overlay callback may not touch the model AT ALL. The repair ran from the mouse move,
+# the write raised, #reassert_behavior's own rescue swallowed it, and the only symptom
+# was grips that stayed wrong -- a silent failure, which is the worst kind. So the move
+# may only schedule. The shim raises here exactly as SketchUp does; without that this
+# check would pass while doing the forbidden thing.
+check "but the move itself changes nothing -- it only schedules" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  release
+  at = $SU_TIMERS.size
+  mouse_moved
+  scheduled = $SU_TIMERS.size > at
+  during = mask_of(group)
+  fire_timers(at)
+  scheduled && during == ALL && mask_of(group) == XYZ
 end
 
 # Belt and braces, and the reason the repair calls #write_behavior instead of
@@ -521,7 +564,9 @@ check "and it writes the mask without opening an operation of its own" do
   select(group)
   release
   $SU_CALLS[:start_operation].clear
+  at = $SU_TIMERS.size
   mouse_moved
+  fire_timers(at)
   mask_of(group) == XYZ && $SU_CALLS[:start_operation].empty?
 end
 
@@ -534,10 +579,14 @@ check "an orbit is not the safe moment either -- it waits for a real move" do
   select(group)
   release
   MODEL.tools.active_tool_name = "CameraOrbitTool"
+  at = $SU_TIMERS.size
   mouse_moved
+  fire_timers(at)
   mid_orbit = mask_of(group)
   MODEL.tools.active_tool_name = nil
+  at = $SU_TIMERS.size
   mouse_moved
+  fire_timers(at)
   mid_orbit == ALL && mask_of(group) == XYZ
 ensure
   MODEL.tools.active_tool_name = nil

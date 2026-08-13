@@ -132,10 +132,21 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   # Two things follow, and both are load-bearing:
   #
   #   1. The release only ARMS this (ScalePP2_ToolsOb#scale_finished sets the flag and
-  #      does nothing else). The repair itself runs from the overlay's #onMouseMove,
+  #      does nothing else). The repair is triggered by the overlay's #onMouseMove,
   #      which SketchUp does not deliver in the middle of committing a drag. In
   #      practice that is the same instant -- the hand that let go of the grip is
   #      still moving.
+  #
+  #      But NOT run there. An overlay callback may not touch the model at all, which
+  #      is SketchUp's own rule and it says so:
+  #
+  #        RuntimeError: no model changes should be made during overlay callbacks
+  #
+  #      That was the second failed attempt: the repair ran, the write raised, the
+  #      rescue below swallowed it, and the only symptom was grips that stayed wrong.
+  #      So #reassert_behavior_if_pending hands the work to a timer -- a timer callback
+  #      is not an overlay callback, and by then the drag is long committed, so neither
+  #      of the two rules is broken.
   #   2. On the single-object path it writes the mask WITHOUT opening an operation,
   #      through #write_behavior rather than #apply_behavior. Belt and braces: if the
   #      safe moment is ever wrong again, a bare write cannot nest, so the worst case
@@ -182,16 +193,29 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   def self.behavior_repair_pending!
     @behavior_repair_pending = true
   end
+  # Called from the overlay's #onMouseMove, so it must not touch the model itself --
+  # SketchUp raises "no model changes should be made during overlay callbacks" on
+  # anything that tries. All it does is hand the job to a timer, whose callback is
+  # under no such rule.
+  #
+  # The delay is 0 and that is not a race: the mouse move it comes from has already
+  # proved SketchUp is dispatching input, which it does not do while committing a drag.
+  # A timer straight from the RELEASE was a different story and crashed SketchUp -- see
+  # #reassert_behavior.
   def self.reassert_behavior_if_pending
     unless @behavior_repair_pending
       return false
     end
 
-    # Cleared BEFORE the repair, not after: #reassert_behavior re-picks the tool, and
-    # anything that raised in there with the flag still set would be retried on every
-    # single mouse move from then on.
+    # Cleared BEFORE the repair is scheduled, not after it runs: #reassert_behavior
+    # re-picks the tool, and anything that raised with the flag still set would be
+    # retried on every single mouse move from then on.
     @behavior_repair_pending = false
-    reassert_behavior
+    id = UI.start_timer(0, false) do
+      UI.stop_timer(id)
+      reassert_behavior
+    end
+    true
   end
   def self.toggle_dimensions
     Sketchup.write_default(PLUGIN_NAME, "show_dim", !show_dim?)

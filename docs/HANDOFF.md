@@ -421,9 +421,10 @@ mở một operation lồng trong một operation khác là thứ hạ SketchUp.
 Hai hệ quả, cả hai đều load-bearing:
 
 1. Lúc buông grip **chỉ giương cờ** (`scale_finished` → `PLUGIN.behavior_repair_pending!`):
-   không sửa model, không mở operation, không đổi tool, **không cả timer**. Việc vá chạy
-   từ `ScalePP2Overlay#onMouseMove` — SketchUp không gửi mouse move giữa lúc commit một
-   cú kéo. Thực tế là cùng một khoảnh khắc: tay vừa nhả grip vẫn đang di chuyển.
+   không sửa model, không mở operation, không đổi tool, **không cả timer**. Việc vá được
+   **kích** từ `ScalePP2Overlay#onMouseMove` — SketchUp không gửi mouse move giữa lúc
+   commit một cú kéo. Thực tế là cùng một khoảnh khắc: tay vừa nhả grip vẫn đang di
+   chuyển.
 2. Nhánh **một vật** ghi mask **không mở operation** (`write_behavior`, không phải
    `apply_behavior`). Đây là lớp bảo hiểm thứ hai: nếu "khoảnh khắc an toàn" lại sai lần
    nữa, một cú ghi trần **không thể lồng**, tệ nhất là một entry undo lem nhem chứ không
@@ -432,6 +433,36 @@ Hai hệ quả, cả hai đều load-bearing:
 Nhánh **nhiều vật không có** lớp bảo hiểm đó và không thể có: `GroupLock#build_wrapper`
 buộc phải mở operation để gom group. Nhánh đó dựa hoàn toàn vào việc mouse move là
 khoảnh khắc an toàn — đáng nhớ nếu crash quay lại khi đang chọn từ 2 vật.
+
+### Lần hỏng thứ hai: overlay callback KHÔNG được sửa model
+
+Hết crash rồi mà grip vẫn 26. Probe (`fix=`/`ret=`) chỉ ra ngay:
+
+```
+7  ... mask=0 want=120 lock=false pts=26 ... pend=false fix=1 ret=false pick=2
+#<RuntimeError: no model changes should be made during overlay callbacks>
+```
+
+`fix=1` → bản vá **đã chạy**. `ret=false` + exception → nó bị **SketchUp từ chối**.
+`onMouseMove` của một `Sketchup::Overlay` là **read-only đối với model**, đây là luật của
+chính SketchUp. `rescue` trong `reassert_behavior` nuốt exception, nên triệu chứng duy
+nhất là grip vẫn sai — **một cú hỏng im lặng**, loại tệ nhất.
+
+Nên `reassert_behavior_if_pending` **chỉ đặt một timer**; việc vá chạy trong callback của
+timer, chỗ không bị luật đó chi phối. Delay 0 và **không phải race**: cái mouse move gọi
+nó đã chứng minh SketchUp đang dispatch input, mà SketchUp không dispatch input giữa lúc
+commit một cú kéo. Timer đi thẳng từ **cú buông** thì lại là chuyện khác và đã crash.
+
+**Shim đã học luật này.** `Behavior#no_scale_mask=` trong `su_shim.rb` raise đúng câu đó
+khi `$SU_IN_OVERLAY_CALLBACK` được bật, và `behavior_test.rb` bật cờ ấy quanh mỗi lần gọi
+vào `onMouseMove`. Viết shim trước, xem 8 check đỏ, rồi mới sửa code — nếu không thì check
+"mouse move vá được mask" vẫn xanh trong khi đang làm đúng cái việc bị cấm.
+
+**Bài học chung, đã sai hai lần liên tiếp:** "khoảnh khắc an toàn" trong SketchUp không
+suy ra được từ code. Cả hai lần shim đều xanh hết. Lần một SketchUp nói qua log file, lần
+hai qua một exception bị `rescue` nuốt. Nếu có lần ba: mỗi `rescue StandardError` trong
+đường vá là một chỗ SketchUp có thể đang từ chối mà không ai nghe thấy — probe với cột
+`ret=` là cách nghe.
 
 Ba việc `reassert_behavior` làm, đúng thứ tự:
 
@@ -458,9 +489,9 @@ sống sót cho tới khi thêm check đó).
 khác trong bộ máy mask bị chặn bởi overlay — 6 nút trên menu ghi mask bất kể overlay bật
 hay tắt. Có mutation khoá điều này (dời xuống dưới cổng overlay → 6 check đỏ).
 
-**Nguyên nhân đã đo; bản vá thì chưa.** 13 check trong `behavior_test.rb` và 12 mutation
-(kể cả một mutation dựng lại **đúng đoạn code đã crash** — 9 check bắt được nó) đều trên
-shim. Lần đo mask ở trên chạy trên bản **đã cài** (`AppData\Roaming\...\Plugins\`), tức
+**Nguyên nhân đã đo; bản vá thì chưa.** 14 check trong `behavior_test.rb` và 13 mutation
+— trong đó có **hai mutation dựng lại đúng hai lần hỏng thật**: timer từ cú buông (crash)
+và vá ngay trong overlay callback (bị từ chối im lặng) — đều trên shim. Lần đo mask ở trên chạy trên bản **đã cài** (`AppData\Roaming\...\Plugins\`), tức
 bản **chưa có** bản vá — nên nó chứng minh *nguyên nhân*, không chứng minh *bản vá chạy
 được*. Muốn xác nhận: `HTU_ScalePlusReload.run` (nó copy từ repo sang bản đã cài rồi mới
 nạp lại — reload bản repo trong khi bản cài đang chạy là cách kinh điển để đuổi theo một
