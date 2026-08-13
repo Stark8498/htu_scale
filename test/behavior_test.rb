@@ -318,21 +318,46 @@ end
 # One drag, through the observer SketchUp actually calls: state 1 when the grip is
 # grabbed, 0 when it is let go. The same observer for both halves, because the 1 is
 # what arms the 0 -- a fresh one for the release would see a release out of nowhere,
-# which is the case the next checks pin as a no-op.
-def drag(observer = tools_observer)
+# which is the case the checks below pin as a no-op.
+#
+# The release only arms the repair. The mouse move is what runs it, and that split is
+# not cosmetic: the first version ran it on a UI.start_timer(0) from the release, and
+# SketchUp crashed on every drag because its own Scale operation was still open. So the
+# move is part of the gesture being modelled here, not a convenience.
+def release(observer = tools_observer)
   observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 1)
-  at = $SU_TIMERS.size
   observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
-  fired = $SU_TIMERS[at..-1].to_a
-  fired.each { |t| t[:proc].call }
-  fired
+  observer
+end
+
+# The overlay SketchUp hands mouse moves to. Built and driven directly rather than
+# reached through PLUGIN.active_overlay, because the shim's Sketchup::Overlays stores
+# nothing and hands back nil -- navigation_test.rb does the same. @tools emptied: the
+# push/pop decision underneath is that test's subject, not this one's.
+OVERLAY = PLUG::ScalePP2Overlay.new
+OVERLAY.enabled = true
+OVERLAY.instance_variable_set(:@tools, [])
+
+# Never twice from the same pixel. #onMouseMove returns early when the position has not
+# changed, so a fixed pair would make the second move in any check a silent no-op -- and
+# a repair that did not happen looks exactly like a repair that was not needed.
+$moves = 0
+def mouse_moved
+  $moves += 1
+  OVERLAY.onMouseMove(0, 40 + $moves, 50, MODEL.active_view)
+end
+
+def drag(observer = tools_observer)
+  release(observer)
+  mouse_moved
+  observer
 end
 
 # This is the case that was MEASURED, in SketchUp 2026 with dev/htu_mask_probe.rb: on a
 # single ComponentInstance the mask reads 120 before the release and 0 after it, with
 # the definition's object_id unchanged. SketchUp clears the mask on the definition it
 # was set on.
-check "a mask lost during the drag is put back on release" do
+check "a mask lost during the drag is put back" do
   self.stored = XYZ
   group = component(XYZ)
   select(group)
@@ -393,38 +418,29 @@ check "a release with no drag before it does nothing at all" do
   self.stored = XYZ
   group = component(ALL)
   select(group)
-  observer = tools_observer
-  at = $SU_TIMERS.size
-  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
-  $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
+  tools_observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
+  mouse_moved
   mask_of(group) == ALL
 end
 
 # The re-pick is itself announced as another state 0, so the repair has to settle: a
-# second pass must find nothing left to do rather than buy a second re-pick. Two
-# releases here, not because SketchUp sends two, but because that is what the re-pick
-# coming back looks like from in here.
+# second pass must find nothing left to do rather than buy a second re-pick.
 check "the repair settles -- a second release buys no second re-pick" do
   self.stored = XYZ
   group = component(ALL)
   select(group)
   observer = tools_observer
-  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 1)
   $SU_CALLS[:send_action].clear
-  2.times do
-    at = $SU_TIMERS.size
-    observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
-    $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
-  end
+  2.times { drag(observer) }
   mask_of(group) == XYZ &&
     $SU_CALLS[:send_action].count("selectScaleTool:") == 1
 end
 
 # And the arming has to be cleared by the release it belongs to. Left set, every later
-# state 0 -- the Scale tool merely becoming active is one -- goes looking for something
-# to repair. The check above cannot see that: by then the mask is already right, so a
-# second repair is free and leaves no trace. This one makes the mask drift again with
-# no drag to explain it, which is the case that must be left alone.
+# mouse move goes looking for something to repair. The check above cannot see that: by
+# then the mask is already right, so a second repair is free and leaves no trace. This
+# one makes the mask drift again with no drag to explain it -- the case that must be
+# left alone.
 check "and the arming does not survive the drag it belongs to" do
   self.stored = XYZ
   group = component(ALL)
@@ -432,24 +448,99 @@ check "and the arming does not survive the drag it belongs to" do
   observer = tools_observer
   drag(observer)
   group.definition.behavior.no_scale_mask = ALL
-  at = $SU_TIMERS.size
+  # The Scale tool becoming active again, on the same observer that saw the drag. Must
+  # not re-arm: nothing was dragged. Without this line the check cannot see a @dragging
+  # that is never cleared, which is how that mutation survived a round.
   observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
-  $SU_TIMERS[at..-1].to_a.each { |t| t[:proc].call }
+  mouse_moved
   mask_of(group) == ALL
 end
 
-# Same rule as everywhere else the model gets edited from an observer callback, and it
-# matters more here than most: this one lands immediately after the Scale tool's own
-# operation commits.
-check "nothing is repaired inline, before the tick" do
+# The repair re-picks the tool, so a repair that raises with the flag still set would
+# retry on every mouse move from then on. Cleared first, which means an exception costs
+# one lost repair instead of a loop. #reassert_behavior swallows its own exceptions, so
+# the only way to reach the ordering is to make it raise.
+check "the pending flag is cleared before the repair runs, not after" do
+  self.stored = XYZ
+  select(component(ALL))
+  original = PLUG.method(:reassert_behavior)
+  PLUG.define_singleton_method(:reassert_behavior) { raise "boom" }
+  release
+  begin
+    mouse_moved
+  rescue StandardError
+    nil
+  end
+  PLUG.instance_variable_get(:@behavior_repair_pending) == false
+ensure
+  PLUG.define_singleton_method(:reassert_behavior, original)
+end
+
+# ---- the crash ----
+#
+# The first version repaired on a UI.start_timer(0) from the release. SketchUp crashed on
+# every drag, and its own log said why:
+#
+#   Start(Scale)Commit(9)
+#   Start(Macro)New operation ("Scale Handles") started while an existing operation
+#   ("Scale") was still open
+#
+# So the native Scale tool's operation is STILL OPEN at state 0, and still open a timer
+# tick later -- the deferral every other observer callback in this plugin relies on is
+# not enough here. These three checks are the ones that would have caught it.
+check "the release itself touches nothing -- no operation, no tool, no timer" do
   self.stored = XYZ
   group = component(ALL)
   select(group)
-  observer = tools_observer
-  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 1)
+  $SU_CALLS[:start_operation].clear
+  $SU_CALLS[:select_tool].clear
+  $SU_CALLS[:send_action].clear
   at = $SU_TIMERS.size
-  observer.onToolStateChanged(MODEL.tools, "ScaleTool", 21_236, 0)
-  mask_of(group) == ALL && $SU_TIMERS.size > at
+  release
+  mask_of(group) == ALL &&
+    $SU_CALLS[:start_operation].empty? && $SU_CALLS[:select_tool].empty? &&
+    $SU_CALLS[:send_action].empty? && $SU_TIMERS.size == at
+end
+
+check "and the next mouse move is what repairs it" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  release
+  before = mask_of(group)
+  mouse_moved
+  before == ALL && mask_of(group) == XYZ
+end
+
+# Belt and braces, and the reason the repair calls #write_behavior instead of
+# #apply_behavior: a bare write cannot nest inside anything. If the safe moment is ever
+# wrong again the worst case is an untidy undo entry, not a crash.
+check "and it writes the mask without opening an operation of its own" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  release
+  $SU_CALLS[:start_operation].clear
+  mouse_moved
+  mask_of(group) == XYZ && $SU_CALLS[:start_operation].empty?
+end
+
+# An orbit is a mouse move too, and the repair re-picks the Scale tool -- doing that
+# mid-orbit pops SketchUp's camera tool off the stack and aborts the orbit the user is
+# in the middle of. The repair waits; the next ordinary move gets it.
+check "an orbit is not the safe moment either -- it waits for a real move" do
+  self.stored = XYZ
+  group = component(ALL)
+  select(group)
+  release
+  MODEL.tools.active_tool_name = "CameraOrbitTool"
+  mouse_moved
+  mid_orbit = mask_of(group)
+  MODEL.tools.active_tool_name = nil
+  mouse_moved
+  mid_orbit == ALL && mask_of(group) == XYZ
+ensure
+  MODEL.tools.active_tool_name = nil
 end
 
 # A selection of several objects has no definition of its own to carry a mask, so for

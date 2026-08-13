@@ -67,22 +67,31 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   # runs on every selection change, and an unconditional write would dirty the
   # model and push an undo step each time the user clicked something.
   def self.apply_behavior(selection = Sketchup.active_model.selection)
-    state = behavior_state
-    objects = selection.to_a.select { |e| e.respond_to?(:definition) }
-    changed = objects.reject do |object|
-      object.definition.behavior.no_scale_mask? == state
-    end
+    changed = behavior_drift(selection)
     if changed.empty?
       return 0
     end
     model = Sketchup.active_model
     model.start_operation("Scale Handles", true)
-    changed.each { |object| object.definition.behavior.no_scale_mask = state }
+    write_behavior(changed)
     model.commit_operation
     changed.size
   rescue StandardError => e
     p(e)
     0
+  end
+  # Which selected objects are not already in the remembered mode. Split out so a
+  # caller that must NOT open an operation can still ask the question -- see
+  # #reassert_behavior, where opening one crashed SketchUp.
+  def self.behavior_drift(selection = Sketchup.active_model.selection)
+    state = behavior_state
+    selection.to_a.select { |e| e.respond_to?(:definition) }.reject do |object|
+      object.definition.behavior.no_scale_mask? == state
+    end
+  end
+  def self.write_behavior(objects, state = behavior_state)
+    objects.each { |object| object.definition.behavior.no_scale_mask = state }
+    objects.size
   end
   # Puts the chosen mode back after a scale drag, if the drag lost it.
   #
@@ -104,8 +113,38 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   # narrow it.
   #
   # Costs nothing when nothing drifted, which is every drag once this is right:
-  # #apply_behavior returns 0 when the selection already carries the mode, and only a
-  # non-zero count buys a tool re-pick. A re-pick on every grip release would be felt.
+  # nothing to write means no tool re-pick, and a re-pick on every grip release would
+  # be felt.
+  #
+  # ---- WHY THIS DOES NOT RUN WHEN THE GRIP IS RELEASED ----
+  #
+  # The first version did, on a UI.start_timer(0) from onToolStateChanged, and it
+  # CRASHED SketchUp on every drag. SketchUp's own log said why, in plain English:
+  #
+  #   Start(Scale)Commit(9)
+  #   Start(Macro)New operation ("Scale Handles") started while an existing
+  #   operation ("Scale") was still open
+  #
+  # "Scale Handles" is #apply_behavior's operation. So the native Scale tool's own
+  # operation is STILL OPEN when state 0 arrives and still open one timer tick later,
+  # and starting an operation inside another one is what took SketchUp down.
+  #
+  # Two things follow, and both are load-bearing:
+  #
+  #   1. The release only ARMS this (ScalePP2_ToolsOb#scale_finished sets the flag and
+  #      does nothing else). The repair itself runs from the overlay's #onMouseMove,
+  #      which SketchUp does not deliver in the middle of committing a drag. In
+  #      practice that is the same instant -- the hand that let go of the grip is
+  #      still moving.
+  #   2. On the single-object path it writes the mask WITHOUT opening an operation,
+  #      through #write_behavior rather than #apply_behavior. Belt and braces: if the
+  #      safe moment is ever wrong again, a bare write cannot nest, so the worst case
+  #      is an untidy undo entry instead of a crash.
+  #
+  # The multi-object path does NOT get that second protection and cannot: GroupLock has
+  # to group entities, and #build_wrapper opens an operation to do it. So that branch
+  # rests entirely on the mouse move being a safe moment. Worth knowing if a crash ever
+  # comes back with two or more objects selected.
   def self.reassert_behavior
     model = Sketchup.active_model
     unless model && model.valid?
@@ -122,10 +161,11 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       return true
     end
 
-    changed = apply_behavior(model.selection)
-    if changed.zero?
+    changed = behavior_drift(model.selection)
+    if changed.empty?
       return false
     end
+    write_behavior(changed)
 
     # The mask was just rewritten under a Scale tool that has already read the old
     # one, and it does not look again while it stays the active tool. Same reason
@@ -135,6 +175,23 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   rescue StandardError => e
     p(e)
     false
+  end
+  # Set by the grip release, read and cleared by the next mouse move. A plain flag
+  # rather than a timer, because a timer is what fired inside the Scale tool's open
+  # operation and crashed SketchUp.
+  def self.behavior_repair_pending!
+    @behavior_repair_pending = true
+  end
+  def self.reassert_behavior_if_pending
+    unless @behavior_repair_pending
+      return false
+    end
+
+    # Cleared BEFORE the repair, not after: #reassert_behavior re-picks the tool, and
+    # anything that raised in there with the flag still set would be retried on every
+    # single mouse move from then on.
+    @behavior_repair_pending = false
+    reassert_behavior
   end
   def self.toggle_dimensions
     Sketchup.write_default(PLUGIN_NAME, "show_dim", !show_dim?)

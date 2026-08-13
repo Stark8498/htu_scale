@@ -400,16 +400,50 @@ ghi nguyên nhân là `make_unique` cấp cho vật một definition mới mang 
 Bản sửa vẫn **cố tình không phân biệt** hai trường hợp đó: `apply_behavior` đọc
 `object.definition` **mới mỗi lần gọi** nên vá cả hai như nhau, giữ lại không tốn gì, và
 một lần đo trên một phiên bản SketchUp với một loại vật thì chưa loại trừ được đường kia.
-Ba việc, đúng thứ tự:
+
+### Bản đầu làm CRASH SketchUp — đừng đi lại
+
+Bản đầu vá ngay lúc buông grip, bằng `UI.start_timer(0)` từ `onToolStateChanged`.
+**Crash mọi lần kéo.** Log của chính SketchUp
+(`%TEMP%\SketchUpLog-*.log`) nói thẳng:
+
+```
+Start(Scale)Commit(9)
+Start(Macro)New operation ("Scale Handles") started while an existing operation
+("Scale") was still open
+```
+
+`"Scale Handles"` là operation của `apply_behavior`. Nên: **operation "Scale" của Scale
+tool gốc VẪN CÒN MỞ lúc state 0 tới, và còn mở cả sau một tick timer nữa.** Hoãn một
+tick — cách mà *mọi* observer callback khác trong plugin này dùng — **không đủ ở đây**, và
+mở một operation lồng trong một operation khác là thứ hạ SketchUp.
+
+Hai hệ quả, cả hai đều load-bearing:
+
+1. Lúc buông grip **chỉ giương cờ** (`scale_finished` → `PLUGIN.behavior_repair_pending!`):
+   không sửa model, không mở operation, không đổi tool, **không cả timer**. Việc vá chạy
+   từ `ScalePP2Overlay#onMouseMove` — SketchUp không gửi mouse move giữa lúc commit một
+   cú kéo. Thực tế là cùng một khoảnh khắc: tay vừa nhả grip vẫn đang di chuyển.
+2. Nhánh **một vật** ghi mask **không mở operation** (`write_behavior`, không phải
+   `apply_behavior`). Đây là lớp bảo hiểm thứ hai: nếu "khoảnh khắc an toàn" lại sai lần
+   nữa, một cú ghi trần **không thể lồng**, tệ nhất là một entry undo lem nhem chứ không
+   phải crash.
+
+Nhánh **nhiều vật không có** lớp bảo hiểm đó và không thể có: `GroupLock#build_wrapper`
+buộc phải mở operation để gom group. Nhánh đó dựa hoàn toàn vào việc mouse move là
+khoảnh khắc an toàn — đáng nhớ nếu crash quay lại khi đang chọn từ 2 vật.
+
+Ba việc `reassert_behavior` làm, đúng thứ tự:
 
 1. `GroupLock.wrap(model)` trước — selection nhiều vật không có definition riêng để đỡ
    mask, nên với nó thuốc là **cái wrapper**, không phải nước ghi mask. Ghi mask lên
    từng vật để cái lồng hợp nhất không ai chi phối chính là lỗi mà `GroupLock` sinh ra
    để bịt. Không có gì xảy ra nếu wrapper vẫn còn: `wrappable?` từ chối khi đã có một
    cái sống, khi dưới 2 vật, và khi đang ở chế độ all.
-2. `apply_behavior(model.selection)`.
-3. **Chỉ khi** bước 2 trả về khác 0 thì mới `repick_scale_tool` — vì Scale tool không
-   đọc lại mask khi nó vẫn là tool đang chạy (đúng bức tường ở đoạn trên). `changed == 0`
+2. `behavior_drift` + `write_behavior` — **không** `apply_behavior`, vì `apply_behavior`
+   mở operation. Hai hàm đó là phần ruột của nó, tách ra đúng vì lý do này.
+3. **Chỉ khi** bước 2 có gì để ghi thì mới `repick_scale_tool` — vì Scale tool không
+   đọc lại mask khi nó vẫn là tool đang chạy (đúng bức tường ở đoạn trên). Không lệch gì
    là trường hợp của **mọi** cú kéo sau khi bản sửa này đúng, và re-pick sau từng cú kéo
    thì người dùng cảm thấy được.
 
@@ -424,13 +458,21 @@ sống sót cho tới khi thêm check đó).
 khác trong bộ máy mask bị chặn bởi overlay — 6 nút trên menu ghi mask bất kể overlay bật
 hay tắt. Có mutation khoá điều này (dời xuống dưới cổng overlay → 6 check đỏ).
 
-**Nguyên nhân đã đo; bản vá thì chưa.** 9 check trong `behavior_test.rb` và 8 mutation
-đều trên shim. Lần đo ở trên chạy trên bản **đã cài** (`AppData\Roaming\...\Plugins\`),
-tức bản **chưa có** bản vá — nên nó chứng minh *nguyên nhân*, không chứng minh *bản vá
-chạy được*. Muốn xác nhận: `HTU_ScalePlusReload.run` (nó copy từ repo sang bản đã cài
-rồi mới nạp lại — reload bản repo trong khi bản cài đang chạy là cách kinh điển để đuổi
-theo một lỗi đã sửa), rồi chạy lại probe. Cần thấy **một dòng thứ 5** với `mask=120`
-xuất hiện một tick sau dòng `mask=0`. Không có dòng đó nghĩa là bản vá không chạy.
+**Nguyên nhân đã đo; bản vá thì chưa.** 13 check trong `behavior_test.rb` và 12 mutation
+(kể cả một mutation dựng lại **đúng đoạn code đã crash** — 9 check bắt được nó) đều trên
+shim. Lần đo mask ở trên chạy trên bản **đã cài** (`AppData\Roaming\...\Plugins\`), tức
+bản **chưa có** bản vá — nên nó chứng minh *nguyên nhân*, không chứng minh *bản vá chạy
+được*. Muốn xác nhận: `HTU_ScalePlusReload.run` (nó copy từ repo sang bản đã cài rồi mới
+nạp lại — reload bản repo trong khi bản cài đang chạy là cách kinh điển để đuổi theo một
+lỗi đã sửa), rồi chạy lại probe. Cần thấy **một dòng thứ 5** với `mask=120` xuất hiện
+ngay sau dòng `mask=0`, và **không có** crash.
+
+Chỗ đáng nghi tiếp theo nếu vẫn còn vấn đề: `repick_scale_tool` gọi `select_tool(nil)`.
+Log lần crash cho thấy nó **đã chạy** (`Tool(SelectionTool)` rồi `Tool(ScaleTool)` ở ba
+dòng cuối) mà SketchUp không cảnh báo gì về nó — chỉ cảnh báo về operation lồng nhau. Nên
+nó *chưa* bị loại trừ, chỉ là không có bằng chứng nào chỉ vào nó. Nếu crash quay lại sau
+khi đã bỏ operation lồng nhau thì đây là nghi phạm còn lại, và lúc đó phải tìm cách bắt
+Scale tool đọc lại mask mà không đụng tool stack.
 
 **Orbit / pan / zoom giữa lúc scale không mất gì** — `ScalePP2_ToolsOb::NAVIGATION`
 trong `observer.rb`. SketchUp cài cả ba thứ này thành **tool change**: giữ chuột giữa là

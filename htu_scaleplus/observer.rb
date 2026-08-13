@@ -244,16 +244,25 @@ end
         end
         PLUGIN.active_overlay.onToolStateChanged(tool_name, tool_state)
       end
-      # A grip has just been let go of.
+      # A grip has just been let go of. This ARMS the mask repair and does nothing
+      # else -- no model edit, no operation, no tool change, not even a timer.
+      #
+      # The first version ran the repair from a UI.start_timer(0) right here, and it
+      # crashed SketchUp on every drag. Its own log said why:
+      #
+      #   Start(Scale)Commit(9)
+      #   Start(Macro)New operation ("Scale Handles") started while an existing
+      #   operation ("Scale") was still open
+      #
+      # So the native Scale tool's operation is still open when state 0 arrives, and
+      # still open a timer tick later. A tick is the deferral every other observer
+      # callback in this plugin uses and it is NOT enough here. The repair now waits
+      # for the overlay's #onMouseMove, which SketchUp does not deliver mid-commit.
       #
       # Keyed off the 1 -> 0 transition, not off state 0 on its own: SketchUp also
-      # reports 0 when the Scale tool merely becomes active, and
-      # PLUGIN.reassert_behavior can re-pick the tool, which brings us straight back
-      # here with another 0. Requiring a 1 first makes that second pass a no-op
-      # instead of a loop.
-      #
-      # Deferred a tick like every other model edit made from an observer callback:
-      # this one lands immediately after the Scale tool's own operation commits.
+      # reports 0 when the Scale tool merely becomes active, and the repair re-picks
+      # the tool, which brings us straight back here with another 0. Requiring a 1
+      # first makes that second pass a no-op instead of a loop.
       def scale_finished(tool_name, tool_state)
         unless tool_name == "ScaleTool"
           return false
@@ -266,10 +275,7 @@ end
           return false
         end
         @dragging = false
-        id = UI.start_timer(0, false) do
-          UI.stop_timer(id)
-          PLUGIN.reassert_behavior
-        end
+        PLUGIN.behavior_repair_pending!
         true
       rescue StandardError => e
         p(e)

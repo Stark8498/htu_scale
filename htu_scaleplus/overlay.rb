@@ -32,6 +32,12 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
       if PLUGIN.navigating?
         return
       end
+      # The first safe moment after a grip is let go, and the reason the repair is not
+      # done at the release itself: SketchUp's Scale operation is still open then, and
+      # opening one inside it crashed SketchUp on every drag. A mouse move is never
+      # delivered mid-commit. Below the navigation guard on purpose -- the repair can
+      # re-pick the Scale tool, and doing that during an orbit would abort the orbit.
+      PLUGIN.reassert_behavior_if_pending
       dispatch_mouse(flags, x, y, view)
     end
     # The push/pop decision, split out of #onMouseMove so it can also run without
