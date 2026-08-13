@@ -96,7 +96,7 @@ end
           end
         end
         points
-      rescue => exception
+      rescue StandardError
         shape
       end
     end

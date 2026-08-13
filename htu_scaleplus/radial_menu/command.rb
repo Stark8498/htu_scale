@@ -66,7 +66,7 @@ module TRINH_VAN_PHUC::HTU_ScalePlus::RadialMenu
         else
           @icon_texture = nil
         end
-      rescue StandardError => e
+      rescue StandardError
         @icon_texture = nil
       end
     end

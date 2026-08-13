@@ -172,7 +172,8 @@ end
         return
       end
       shape = menu.on_edit? ? @outer_draw : @outer_draw_rounded
-      shadow = 4
+      # `shadow = 4` was here and nothing read it -- whatever drew a shadow with it is
+      # not in the captured source. Dropped so `ruby -w` stays quiet.
       view.drawing_color = BACKGOUND_COLOR
       view.draw2d(GL_POLYGON, shape)
       cam = view.camera

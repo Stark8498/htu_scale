@@ -146,7 +146,9 @@ end
           command_anlge = unit_angle + total_angle
         end
         @zone_commands = compute_zone(@items, command_anlge)
-      rescue StandardError => e
+      rescue StandardError
+        # Swallowed, as in the original. Only the unused `=> e` was removed; making
+        # this report would be a behaviour change, and this file is never loaded.
       end
     end
     def draw(view)

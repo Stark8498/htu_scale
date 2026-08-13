@@ -146,7 +146,8 @@ end
     end
     def self.save_table(table, path = nil)
       path ||= TEMP_DIMS
-      p("save #{table}: #{File.basename(path)}")
+      # A p() of the whole table went here on every save, straight into the user's
+      # Ruby Console. Debugging left in.
       unless path
         return
       end
@@ -224,7 +225,7 @@ end
       end
       begin
         active = PLUGIN.active_overlay.dim_scale.active?
-      rescue StandardError => e
+      rescue StandardError
         active = false
       end
       objects = selected_objects
@@ -249,7 +250,9 @@ end
       raw[1..-1].each do |line|
         rows = line.split(",")
         user, vbo = rows[0..1].map(&:chomp)
-        puts("#{user} => #{vbo}")
+        # A puts of every row was here. Left-over debugging: it printed the whole
+        # file into the user's Ruby Console, one line at a time, with no way to
+        # turn it off.
         data[user] = vbo
       end
       data

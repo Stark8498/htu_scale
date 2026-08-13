@@ -20,7 +20,7 @@ curic_scale_pp_src/
 ├── build.rb                     # verify + package; refuses to build if a test fails
 ├── README_BUILD.md              # this file
 ├── dist/
-│   └── htu_scaleplus-1.2.2.rbz  # 60 files, ~473 KB
+│   └── htu_scaleplus-1.2.2.rbz  # 56 files, ~473 KB
 ├── test/                        # not shipped in the .rbz
 │   ├── su_shim.rb               # SketchUp API shim (load harness)
 │   ├── load_test.rb             # loads the plugin end to end
@@ -154,13 +154,28 @@ itself — an extra wrapper directory makes SketchUp reject the archive.
 Requires SketchUp 2023 or newer (`loader.rb` enforces this; the plugin uses the
 `Sketchup::Overlay` API added in 2023).
 
-## 6. Signing
+## 6. Signing, and what the build does and does not guarantee
 
 The build ships **unsigned**. Set Extension Manager → gear icon → *Security* to
 **Unrestricted** or *Approve unidentified extensions*, otherwise SketchUp will
-refuse to load it. To sign it yourself, upload the `.rbz` to the Trimble
-Extension Digital Signature service; it returns a signed archive with a fresh
-`.susig`.
+refuse to load it. To sign it, upload the `.rbz` to the Trimble Extension Digital
+Signature service; it returns a signed archive with a fresh `.susig`. Signing is
+the one step that cannot be done from this repository — it needs a Trimble account
+and their service, so the archive is handed over unsigned by design.
+
+Three gates exist specifically so the archive can be handed to a store without a
+reviewer finding something the build could have caught:
+
+| Gate | What it refuses to package |
+|------|----------------------------|
+| `ruby -c` | any shipped file that does not parse |
+| `ruby -w` | any **shipped** file with a parse-time warning — unused variable, shadowed name, void assignment. Test files are exempt: a warning there is nobody's problem. This found six, four of them in never-loaded `radial_menu/` |
+| archive layout | any archive whose top level is not exactly `htu_scaleplus.rb` + `htu_scaleplus/`. `lib/` and `resources/` had been riding along at the root for four versions, making four top-level entries where two are allowed |
+
+What none of them prove: **nothing here has run inside SketchUp.** Every test runs
+against `test/su_shim.rb`. `ruby -w -c` is parse-time only, so a warning SketchUp
+itself emits at runtime — a deprecated API call, for instance — is outside what this
+can see. Load the `.rbz` and watch the Ruby Console before submitting.
 
 ## 7. Sanity check after install
 

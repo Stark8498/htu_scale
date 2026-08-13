@@ -32,7 +32,13 @@ module TRINH_VAN_PHUC
     IS_WIN       = Sketchup.platform == :platform_win
     IS_OSX       = Sketchup.platform == :platform_osx
     SCALE_FACTOR = UI.scale_factor
-    TEMP_DIMS    = File.join(PATH_R, "dims.csv")
+    # Not PATH_R. This used to be htu_scaleplus/Resources/dims.csv, i.e. a file the
+    # plugin wrote into its OWN install folder. Two ways that bites a released
+    # extension: the install folder can be read-only, and writing into a signed
+    # extension invalidates the signature Trimble put on it. Sketchup.temp_dir is
+    # the per-user scratch directory and has existed since SketchUp 2014, well below
+    # the 2023 this plugin already requires.
+    TEMP_DIMS    = File.join(Sketchup.temp_dir, "htu_scaleplus_dims.csv")
 
     # pet_toolbar and radial_menu are gone: the six commands the pet toolbar
     # hosted now sit on the real toolbar below, and radial_menu/ existed only to

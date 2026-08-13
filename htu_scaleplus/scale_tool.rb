@@ -540,7 +540,8 @@ end
       entities = @selection.reject do |e|
   e.respond_to?(:locked?) && e.locked?
 end
-      h = {}
+      # `h = {}` was here, assigned and never read -- the method returns [bb, tr].
+      # Dropped because `ruby -w` warns on it, and the package is checked warning-free.
       if entities.empty?
         return nil
       end

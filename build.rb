@@ -32,7 +32,13 @@ RBZ      = File.join(DIST, RBZ_NAME)
 
 # Everything that ships. test/, dist/, dev/, build.rb and docs stay out of the
 # archive.
-EXCLUDE_DIRS  = %w[test dist docs dev .git].freeze
+#
+# lib/ and resources/ are excluded because they must be: an .rbz is required to hold
+# exactly one .rb file and one folder of the same name at its top level, and those two
+# made it four. Nothing requires them either -- no file in the plugin mentions
+# main_logic, observer or ui_handler, and resources/ holds one .gitkeep. They stay in
+# the repository; they just do not go in the archive. See the structure gate below.
+EXCLUDE_DIRS  = %w[test dist docs dev .git lib resources].freeze
 EXCLUDE_FILES = %w[build.rb README_BUILD.md].freeze
 # *.susig is Trimble's extension signature, which hashes every shipped file.
 # This build replaces loader.rb and edits six others, so the original signature
@@ -61,6 +67,22 @@ unless syntax_fails.empty?
   abort "ABORT: ruby -c failed for:\n  #{syntax_fails.join("\n  ")}"
 end
 puts "  ruby -c            : OK (#{Dir.glob(File.join(ROOT, '**', '*.rb')).size} files)"
+
+# ruby -w on the files that actually ship, not on the whole repo: a warning in a test
+# is nobody's problem, a warning in the payload is something a reviewer can run into.
+# Parse-time only -- unused variables, shadowed names, void assignments -- since -c
+# does not execute anything. That is the class of warning this catches, and it is the
+# class that had six instances in here.
+shipped_rb = payload_files.select { |r| r.end_with?(".rb") }
+warned = shipped_rb.filter_map do |rel|
+  out = `"#{RUBY}" -w -c "#{File.join(ROOT, rel)}" 2>&1`.lines
+         .grep(/warning:/).map(&:strip)
+  "#{rel}\n      #{out.join("\n      ")}" unless out.empty?
+end
+unless warned.empty?
+  abort "ABORT: ruby -w warns in shipped files:\n    #{warned.join("\n    ")}"
+end
+puts "  ruby -w            : clean (#{shipped_rb.size} shipped files)"
 
 {
   "dropped-param scan" => "test/dropped_param_scan.rb",
@@ -92,6 +114,18 @@ abort "ABORT: no payload files found" if files.empty?
 unless files.include?("htu_scaleplus.rb")
   abort "ABORT: htu_scaleplus.rb would not be in the archive root"
 end
+
+# An .rbz must hold exactly one .rb file and one folder, both named the same, at its
+# top level. Nothing enforced that here, and lib/ (3 files) plus resources/ (1 file)
+# had been riding along at the root for four versions -- four top-level entries where
+# two are allowed. Neither is required by anything in the plugin. Checked rather than
+# remembered, because "I excluded it once" is not a property of the next build.
+tops = files.map { |r| r.include?("/") ? "#{r[%r{\A[^/]+}]}/" : r }.uniq.sort
+unless tops == ["htu_scaleplus.rb", "htu_scaleplus/"]
+  abort "ABORT: the archive root must be exactly htu_scaleplus.rb + htu_scaleplus/,\n" \
+        "       and it would be: #{tops.join(', ')}"
+end
+puts "  archive layout     : one .rb + one folder at the root"
 
 # ------------------------------------------------------------------ package
 puts "\n== package =="

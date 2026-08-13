@@ -540,8 +540,23 @@ và `%LOCALAPPDATA%\...\PrivatePreferences.json` (giữ trong RAM, ghi lúc tho�
 ruby build.rb
 ```
 
-Chạy `ruby -c` cho toàn bộ 49 file, rồi 13 gate. Fail bất kỳ gate nào là **không**
-đóng gói. Ra `dist/htu_scaleplus-1.2.2.rbz` (60 file, ~473 KB).
+Chạy `ruby -c` cho toàn bộ 49 file, rồi 15 gate nữa. Fail bất kỳ gate nào là **không**
+đóng gói. Ra `dist/htu_scaleplus-1.2.2.rbz` (**56 file**, ~473 KB).
+
+**Hai gate thêm 2026-08-13, cho lần đem lên store:**
+
+- **`ruby -w`** trên các file **thật sự ship** (không tính `test/` — warning ở đó không
+  phải vấn đề của ai). Bắt được 6 chỗ, 4 trong `radial_menu/` là code không hề được
+  nạp. Chỉ là warning lúc parse: biến gán mà không đọc, tên bị che. **Không** thấy được
+  warning do chính SketchUp phát ra lúc chạy.
+- **Bố cục archive**: gốc `.rbz` phải đúng bằng `htu_scaleplus.rb` + `htu_scaleplus/`.
+  `lib/` (3 file) và `resources/` (1 file `.gitkeep`) đã **nằm ở gốc suốt 4 version** —
+  4 mục ở gốc trong khi chỉ được 2. Không file nào trong plugin require tới chúng. Vẫn
+  giữ trong repo, chỉ không vào archive (`EXCLUDE_DIRS` trong `build.rb`).
+
+Cả hai gate đã được mutation test: trả `h = {}` về là build **abort**; bỏ `lib resources`
+khỏi `EXCLUDE_DIRS` là build **abort** kèm in ra 4 mục gốc. Gate in chữ xanh mà không
+chặn được gì thì tệ hơn không có gate.
 
 Version nằm **một chỗ duy nhất**: `PLUGIN_VERSION` trong `htu_scaleplus.rb` (hiện
 **1.2.2**). `build.rb` đọc nó bằng regex để đặt tên .rbz, nên đổi ở đó là đủ — không có
@@ -875,20 +890,32 @@ end
 Sketchup.active_model.tools.add_observer(TN.new)
 ```
 
-**`GroupLock` chưa chạy thử trong SketchUp thật.** 13 gate xanh trên shim, nhưng ba điều
+**`GroupLock` chưa chạy thử trong SketchUp thật.** 16 gate xanh trên shim, nhưng ba điều
 chỉ SketchUp trả lời được: (1) group tạm mask 120 có thật sự ra đúng 6 grip khi trước đó
 đang chọn nhiều vật hay không; (2) **đã có câu trả lời, xem `repick_scale_tool` ở §4:**
 `send_action("selectScaleTool:")` một mình **không đủ**; (3) chuỗi undo sau khi scale xong trông thế nào —
 `sweep` là lưới an toàn cho việc đó, nhưng số lần bấm Ctrl+Z người dùng phải chịu thì
 chưa ai đếm. Chạy `HTU_ScalePlusReload.run` rồi chọn 2 group, bật nút XYZ, bấm S.
 
-**Rác còn trong .rbz** — `lib/` (3 file), `resources/`, `radial_menu/` (18 file),
-`radial_menu.rb`. Không file nào được require. Bỏ khỏi `EXCLUDE_DIRS` là gói nhẹ đi
-đáng kể, nhưng chưa ai xác nhận `dims.rb`/`ui/` có gián tiếp đụng tới không.
+**Rác còn trong .rbz** — `radial_menu/` (18 file) và `radial_menu.rb`, không file nào
+được require. **Còn `lib/` và `resources/` đã ra khỏi archive** từ 2026-08-13: chúng
+nằm ở *gốc* archive nên vi phạm luật "một `.rb` + một folder cùng tên", chứ không chỉ
+là rác — xem §6. `radial_menu/` nằm *bên trong* `htu_scaleplus/` nên không vi phạm bố
+cục, và 4 warning của nó đã sửa tại chỗ thay vì xoá file, vì người dùng đã từng chọn
+giữ lại. Muốn gói nhẹ hơn thì thêm vào `EXCLUDE_DIRS`, nhưng chưa ai xác nhận
+`dims.rb`/`ui/` có gián tiếp đụng tới không.
 
 **`utils.rb:238`** vẫn là `@text_typeface.draw2d_text(view, point, text.to_s, {nil => options})`.
-Key `nil` này SketchUp thật sẽ raise `TypeError`. Test không chạm tới nhánh đó nên
-gate vẫn xanh. Sửa thì nhiều khả năng là `options` trực tiếp, nhưng chưa kiểm chứng.
+**Mục này trước đây ghi sai hai chỗ, đã kiểm lại 2026-08-13:**
+- Không phải `TypeError` vì key `nil`. `TextTypeface#draw2d_text` (`main.rb:442`) nhận
+  **3 tham số**, chỗ này truyền **4** → `ArgumentError: wrong number of arguments`.
+- Không phải rủi ro sống. Nó nằm trong `draw_dim_text`, chỉ được gọi từ `draw_dim`
+  (`utils.rb:257`), mà **`draw_dim` không có caller nào trong toàn plugin**. Cả chuỗi
+  là code chết — đó là lý do người dùng chưa bao giờ gặp. Số đo trên màn hình do
+  `scale_tool.rb:829` vẽ, đường khác hẳn.
+
+Vẫn để nguyên: sửa một đường không ai gọi tới là đoán xem bản gốc định làm gì. Cùng
+chính sách với `listbox.rb` và `definition_paths`.
 
 **`overlay.rb:70`** — `fit_to_length = false` là công tắc tắt cứng, cả khối dưới nó
 là code chết. Chưa rõ nó từng làm gì.
