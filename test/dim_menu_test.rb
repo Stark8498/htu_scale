@@ -11,6 +11,9 @@
 #   Open list...
 #   Text size  >
 #
+# With nothing saved and nothing referenced, only the last two -- and no divider
+# above them, since there is no block left for it to divide.
+#
 # DimMenu is handed a menu object and only calls add_item / add_submenu /
 # add_separator / set_validation_proc on it, so a recorder stands in for
 # Sketchup::Menu and the whole structure can be asserted without SketchUp.
@@ -145,6 +148,21 @@ check "every size carries a validation proc for the checkmark" do
   menu.entries[0, 3].all? { |label| menu.validations.key?(label) }
 end
 
+# The only check that clicking a size does anything used to be the one on the
+# half/double suggestion, which is gone -- so deleting it would have taken the
+# whole apply path with it. Moved onto a saved size, which is the path that
+# matters anyway.
+check "picking a saved size resizes to it" do
+  m, = build(%w[45 200 400])
+  label = m.entries[1]
+  block = m.blocks[label]
+  next false unless block
+
+  TOOL_SPY.calls.clear
+  block.call
+  TOOL_SPY.calls.last == [:apply_dim_value, "lenx", FAV.list(nil, "lenx")[1]]
+end
+
 check "the size matching the current length is checked" do
   current = FAV.list(group, "lenx")[1]
   m = RecordingMenu.new
@@ -199,36 +217,30 @@ end
 puts "\n--- empty list: a fresh install, which is what everyone sees first ---"
 empty, = build([], length: 450.0)
 
-# The two suggestions ARE the menu on a fresh install. Dropping them left
-# "Open list..." and Text size, so a right-click offered no size to pick at all
-# until the user had gone and saved one -- and nothing on the menu said so.
-check "half and double are offered instead of an empty block" do
-  empty.entries[0, 2] == ["225.0 (x0.5)", "900.0 (x2.0)"]
+# The half and double suggestions -- "225 (x0.5)", "900 (x2.0)" -- were removed on
+# request, 2026-08-13, and this is the one removal with a price attached: they were
+# the ONLY thing the menu offered before anything was saved, so a first right-click
+# now has no size on it. That was put to the user and chosen with the cost stated.
+check "no size is offered until one is saved" do
+  empty.labels.none? { |l| l =~ /\(x[\d.]+\)/ }
 end
 
-check "each one carries its factor, so which is which is readable" do
-  empty.labels.count { |l| l =~ /\(x(0\.5|2\.0)\)/ } == 2
+check "just the way to add one, and Text size" do
+  empty.entries == ["Open list...", "Text size >"]
 end
 
-check "picking one resizes to that length" do
-  m, = build([], length: 450.0)
-  block = m.blocks["900.0 (x2.0)"]
-  next false unless block
-
-  TOOL_SPY.calls.clear
-  block.call
-  TOOL_SPY.calls.last == [:apply_dim_value, "lenx", 900.0]
+# A separator divides. With no block above it there is nothing to divide, and a
+# menu whose first row is a horizontal rule looks like an item that failed to draw.
+check "and no divider hanging at the top with nothing above it" do
+  empty.entries.first != :separator
 end
 
-check "then the same two actions" do
-  empty.entries[2, 3] == [:separator, "Open list...", "Text size >"]
-end
-
-# A dimension of zero would suggest 0 and 0, and dividing by it to build the label
-# raises. Degenerate bounds are real: a flat selection has one.
-check "a zero-length dimension suggests nothing rather than raising" do
+# The label used to be built by dividing by the length, so zero raised. Nothing
+# divides by it any more, but degenerate bounds are real -- a flat selection has
+# one -- so the path stays covered.
+check "a zero-length dimension is not a crash" do
   m, = build([], length: 0.0)
-  m.entries.first == :separator
+  m.entries == ["Open list...", "Text size >"]
 end
 
 # The callback runs through defer, which touches IS_WIN and UI.start_timer, so a
@@ -304,6 +316,43 @@ check "the block appears with its grayed heading" do
   at = m.entries.index("Referenced Dimensions")
   at && m.validations["Referenced Dimensions"].call == MF_GRAYED &&
     m.entries[at + 1] == "900.0 (in model)"
+end
+
+# It is the first block when nothing is saved, so its own divider has nothing above
+# it either. Same rule as the fresh-install menu, other branch of the same `if`.
+check "with nothing saved it starts the menu, no divider above it" do
+  tool, = two_instances(2)
+  reset_favorites!
+  m = RecordingMenu.new
+  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
+  m.entries.first == "Referenced Dimensions"
+end
+
+# The separator below the blocks is drawn from what add_referenced_items reports
+# back, and nothing else notices if that answer is wrong: with no saved block the
+# only "yes" comes from here, so a false would run the actions straight on from the
+# referenced list with no rule between them. Found by mutation -- it survived.
+check "and a divider still comes between it and the actions" do
+  tool, = two_instances(2)
+  reset_favorites!
+  m = RecordingMenu.new
+  MENU.build(m, tool, MODEL.selection[0], "lenx", 450.0)
+  at = m.entries.index("Open list...")
+  at && at > 0 && m.entries[at - 1] == :separator
+end
+
+# And with a saved block above it, the divider is what keeps the two lists of bare
+# lengths from reading as one. 45 is 45 MODEL units -- millimetres -- so it cannot
+# collide with the 450 and 900 inches the geometry is.
+check "with sizes saved above it, a divider separates the two" do
+  tool, here = two_instances(2)
+  reset_favorites!
+  good, = FAV.parse("45")
+  FAV.add(here, "lenx", good)
+  m = RecordingMenu.new
+  MENU.build(m, tool, here, "lenx", 450.0)
+  at = m.entries.index("Referenced Dimensions")
+  at && at >= 2 && m.entries[at - 1] == :separator && m.entries[0] != :separator
 end
 
 # Offering the size it already is would be a menu entry that does nothing.

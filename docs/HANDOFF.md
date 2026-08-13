@@ -124,12 +124,8 @@ Open list...            <- mở cửa sổ Dimensions: thêm, xoá từng cái, 
 Text size >             Small / Medium / Large
 ```
 
-Khi **chưa lưu gì**, khối trên cùng đổi thành hai gợi ý nửa/đôi:
-
-```
-225 (x0.5)
-900 (x2.0)
-```
+Khi **chưa lưu gì và không có kích thước tham chiếu**, menu chỉ còn đúng hai dòng
+cuối — `Open list...` và `Text size` — **không có gạch ngang** ở trên chúng.
 
 **Bốn thứ trong menu này là của Scale++ gốc và từng bị mất** trong lúc viết
 `dim_menu.rb`: hai gợi ý nửa/đôi, hai heading xám, `Referenced Dimensions`, và
@@ -137,7 +133,7 @@ Khi **chưa lưu gì**, khối trên cùng đổi thành hai gợi ý nửa/đô
 **toàn bộ** những gì menu có, mất nó thì chuột phải ra một menu không có kích thước
 nào để bấm. Cả bốn đã được trả lại trong lần audit trước release.
 
-**Rồi hai trong số đó bị bỏ lại, 2026-08-13, theo yêu cầu — quyết định, không phải
+**Rồi ba trong số đó bị bỏ lại, 2026-08-13, theo yêu cầu — quyết định, không phải
 lỗi.** Khác hẳn lần trước: lần trước là mất mà không ai biết, lần này là chọn.
 
 - `Favorite Dimensions` — heading xám nằm trên khối đầu tiên. Khối đó ở ngay đỉnh
@@ -149,9 +145,26 @@ lỗi.** Khác hẳn lần trước: lần trước là mất mà không ai bi�
   lối nào mở `DimsUI`, nên 11 file đó ship mà không ai tới được, và các lệnh refresh
   trong `observer.rb` không tìm thấy dialog nào để refresh (`DimsUI.dialog` = nil,
   nhánh đó tự thoát — không raise). Xem §8.
+- **Hai gợi ý nửa/đôi** `225 (x0.5)` / `900 (x2.0)` — một phép nhân đưa ra dưới dạng
+  kích thước, mà kéo grip thì đã làm đúng việc đó rồi. **Đây là lần bỏ duy nhất có
+  giá phải trả, và đã hỏi trước khi bỏ:** đó là thứ *duy nhất* menu đưa ra khi chưa
+  lưu gì, nên **máy khách vừa cài, chuột phải lần đầu không có kích thước nào để
+  bấm** cho tới khi tự lưu một giá trị qua `Open list...`. Người dùng chọn bỏ sau khi
+  hệ quả này được nói rõ.
 
-Cả hai đều bị chốt bằng check trong `dim_menu_test.rb` để không lặng lẽ bò về, và
-mutation test đã xác nhận: trả heading về hay trả `Show Manager` về là 4 check đỏ.
+Kéo theo một thay đổi không ai yêu cầu nhưng là hệ quả trực tiếp: **gạch ngang giờ có
+điều kiện**. Gạch ngang là để *chia*, nên nó cần có khối ở cả hai bên; mất khối gợi ý
+thì máy mới cài không còn gì ở trên nó, và một menu mở ra bằng một đường kẻ ngang đọc
+như một mục vẽ lỗi. `add_referenced_items` giờ **trả về** nó có thêm gì vào menu hay
+không, và nhận thêm tham số `divide` — chính là câu hỏi đó hỏi về khối phía trước nó.
+
+Cả ba đều bị chốt bằng check trong `dim_menu_test.rb`. Mutation test 6 mutation, và
+**một cái sống sót**: cho `add_referenced_items` trả `false` dù nó vừa thêm mục. Không
+check nào thấy — khi chưa lưu gì thì đó là tiếng "có" duy nhất, nên các mục hành động
+sẽ chạy liền sau danh sách tham chiếu mà không có đường kẻ. Đã thêm check bịt lại.
+Cũng phải chú ý: check duy nhất chứng minh **bấm một kích thước thì vật đổi kích
+thước** nằm trên chính cái gợi ý nửa/đôi — xoá gợi ý mà không nhìn thì mất luôn cả
+đường `apply_dim_value`. Đã chuyển check đó sang một kích thước đã lưu.
 
 `Referenced Dimensions` = `ScalePPTool#referenced_dims(axis)`: đi qua mọi instance của
 mọi definition trùng tên `dynamic_attributes` với definition đang chọn, đo cạnh theo
