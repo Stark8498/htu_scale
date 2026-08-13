@@ -464,6 +464,29 @@ hai qua một exception bị `rescue` nuốt. Nếu có lần ba: mỗi `rescue 
 đường vá là một chỗ SketchUp có thể đang từ chối mà không ai nghe thấy — probe với cột
 `ret=` là cách nghe.
 
+### Lần thứ ba: chạy được (đã xác nhận trên SketchUp 2026)
+
+```
+5  mask=0    lock=false pts=26  pend=true   fix=0  ret=nil   pick=0   <- buông grip
+6  mask=120  lock=true  pts=6   pend=false  fix=1  ret=true  pick=1   <- di chuột
+```
+
+Hai cú kéo liên tiếp cho `fix=2 pick=2`, mask về 120 cả hai lần. **Đây là lần đầu tiên
+một tính năng của nhánh này được xác nhận trong SketchUp thật**, không phải trên shim.
+
+Kèm theo một thứ chỉ lộ ra khi nó chạy đúng: `Sketchup.send_action` **deprecated trong
+SketchUp 2026** và in warning **mỗi lần vá**, tức mỗi cú kéo khi đang bật khoá trục. Chấp
+nhận được khi chỉ có cú bấm nút đi qua đó; thành rác console khi mỗi cú kéo đều đi qua.
+Không có API thay thế: `Model#select_tool` chỉ nhận Ruby tool, không có gì khác kích hoạt
+được Scale tool **của chính SketchUp**. Nên `repick_scale_tool` đặt `$VERBOSE = nil` quanh
+**đúng một call** rồi trả lại ngay, kể cả khi call đó raise (`ensure`). Trả lại là phần
+quan trọng hơn: để `$VERBOSE` nil vĩnh viễn là tắt warning cho **mọi extension khác** trong
+phiên đó.
+
+Chưa xác nhận là warning có tắt thật hay không — chỉ tắt nếu SketchUp phát qua `rb_warn`
+(hàm này tôn trọng `$VERBOSE`). Nếu nó ghi thẳng ra console thì dòng đó vẫn còn và không
+có gì khác thay đổi.
+
 Ba việc `reassert_behavior` làm, đúng thứ tự:
 
 1. `GroupLock.wrap(model)` trước — selection nhiều vật không có definition riêng để đỡ

@@ -179,6 +179,44 @@ check "and the mark is gone once the trip is over" do
   !PLUG::GroupLock.suspended?
 end
 
+# SketchUp 2026 prints a deprecation notice for every Sketchup.send_action. Harmless once
+# per button press, console spam once per drag now that the mask repair goes through here,
+# and there is no replacement API for activating SketchUp's own Scale tool. Silenced for
+# the length of that one call.
+check "send_action runs with warnings off, so it stops repeating per drag" do
+  seen = :not_called
+  original = Sketchup.method(:send_action)
+  Sketchup.define_singleton_method(:send_action) do |action|
+    seen = $VERBOSE
+    original.call(action)
+  end
+  PLUG.repick_scale_tool
+  seen.nil?
+ensure
+  Sketchup.define_singleton_method(:send_action, original)
+end
+
+# Global state, so putting it back matters more than turning it off. A plugin that leaves
+# $VERBOSE nil has switched off warnings for every other extension in the session too.
+check "and $VERBOSE is put back afterwards, raise or no raise" do
+  # Set to a known value rather than reading whatever the global happens to hold. Earlier
+  # checks already called through repick_scale_tool, so a version that switches warnings
+  # off and never restores them would have left $VERBOSE nil before this check starts --
+  # and then "unchanged" compares nil to nil and passes. That mutation survived a round on
+  # exactly that.
+  $VERBOSE = false
+  PLUG.repick_scale_tool
+  after_ok = $VERBOSE == false
+  original = Sketchup.method(:send_action)
+  Sketchup.define_singleton_method(:send_action) { |_a| raise "boom" }
+  $VERBOSE = false
+  PLUG.repick_scale_tool
+  after_ok && $VERBOSE == false
+ensure
+  Sketchup.define_singleton_method(:send_action, original)
+  $VERBOSE = false
+end
+
 # Only the leaving half is excused. A real departure still has to unwrap, or a
 # scratch group is left in the user's model.
 check "but a real tool change still unwraps" do

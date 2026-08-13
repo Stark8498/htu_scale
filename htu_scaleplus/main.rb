@@ -52,7 +52,32 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
     # two undo steps for one button press. Only this deliberate round trip is
     # excused; a real departure still unwraps.
     GroupLock.suspend { model.select_tool(nil) }
-    Sketchup.send_action("selectScaleTool:")
+    # $VERBOSE nil around this one call, restored immediately, even if it raises.
+    #
+    # SketchUp 2026 prints
+    #
+    #   main.rb:55: warning: Sketchup.send_action is deprecated and not being maintained.
+    #
+    # every time. That was tolerable while only a button press reached here. The mask
+    # repair reaches it on every drag that loses the mask -- which is every drag with a
+    # lock on -- so the user's Ruby Console filled up with the same line, three times in
+    # one probe run.
+    #
+    # There is no replacement to move to: Model#select_tool takes Ruby tools only, and
+    # nothing else in the API activates SketchUp's OWN Scale tool. The deprecation has
+    # been read and is written down in docs/HANDOFF.md; silencing a line that repeats per
+    # drag is not the same as not knowing about it.
+    #
+    # UNVERIFIED, and safe either way: this works only if SketchUp emits the notice
+    # through rb_warn, which honours $VERBOSE. If it writes to the console directly the
+    # line simply stays and nothing else changes.
+    verbose = $VERBOSE
+    begin
+      $VERBOSE = nil
+      Sketchup.send_action("selectScaleTool:")
+    ensure
+      $VERBOSE = verbose
+    end
     true
   rescue StandardError => e
     p(e)
