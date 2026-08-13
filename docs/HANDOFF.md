@@ -115,14 +115,12 @@ SketchUp, còn transformation đặt từ Ruby thì mọi mask đều đổi đ�
 **Danh sách kích thước đã lưu** — chuột phải vào số đo:
 
 ```
-Favorite Dimensions     <- heading xám, chỉ hiện khi có giá trị đã lưu
 45 / 200 / 400          <- tick khi trùng kích thước hiện tại
 --------
 Referenced Dimensions   <- heading xám, chỉ hiện khi tìm được
 900 (in model)          <- kích thước instance khác cùng definition đang có
 --------
 Open list...            <- mở cửa sổ Dimensions: thêm, xoá từng cái, xoá hết
-Show Manager            <- dialog Vue DimsUI (bản gốc)
 Text size >             Small / Medium / Large
 ```
 
@@ -137,8 +135,23 @@ Khi **chưa lưu gì**, khối trên cùng đổi thành hai gợi ý nửa/đô
 `dim_menu.rb`: hai gợi ý nửa/đôi, hai heading xám, `Referenced Dimensions`, và
 `Show Manager`. Nặng nhất là gợi ý nửa/đôi — máy mới cài chưa lưu gì thì đó là
 **toàn bộ** những gì menu có, mất nó thì chuột phải ra một menu không có kích thước
-nào để bấm. `Show Manager` là **đường duy nhất** mở được DimsUI, mà DimsUI vẫn ship
-11 file và `observer.rb` vẫn refresh nó mỗi lần đổi selection.
+nào để bấm. Cả bốn đã được trả lại trong lần audit trước release.
+
+**Rồi hai trong số đó bị bỏ lại, 2026-08-13, theo yêu cầu — quyết định, không phải
+lỗi.** Khác hẳn lần trước: lần trước là mất mà không ai biết, lần này là chọn.
+
+- `Favorite Dimensions` — heading xám nằm trên khối đầu tiên. Khối đó ở ngay đỉnh
+  menu và các kích thước chính là *lý do* menu tồn tại, nên cái label là một dòng
+  không bấm được để giải thích điều đã rõ. `Referenced Dimensions` **giữ lại**: nó
+  đứng sau một danh sách trông y hệt nó, phải có gì đó phân ranh hai khối.
+- `Show Manager` — mở dialog Vue `DimsUI` cũ. `Open list...` ngay trên nó làm đúng
+  việc đó trong một cửa sổ viết riêng cho việc đó. **Hệ quả cần biết:** giờ không còn
+  lối nào mở `DimsUI`, nên 11 file đó ship mà không ai tới được, và các lệnh refresh
+  trong `observer.rb` không tìm thấy dialog nào để refresh (`DimsUI.dialog` = nil,
+  nhánh đó tự thoát — không raise). Xem §8.
+
+Cả hai đều bị chốt bằng check trong `dim_menu_test.rb` để không lặng lẽ bò về, và
+mutation test đã xác nhận: trả heading về hay trả `Show Manager` về là 4 check đỏ.
 
 `Referenced Dimensions` = `ScalePPTool#referenced_dims(axis)`: đi qua mọi instance của
 mọi definition trùng tên `dynamic_attributes` với definition đang chọn, đo cạnh theo
@@ -794,7 +807,11 @@ gate vẫn xanh. Sửa thì nhiều khả năng là `options` trực tiếp, nh�
 là code chết. Chưa rõ nó từng làm gì.
 
 **`dims.rb` / `DimsUI`** — dialog Vue cũ, vẫn nạp và `observer.rb` vẫn gọi
-`DimsUI.dialog`. Không có lối vào nào từ menu nữa. Có thể là ứng viên xoá.
+`DimsUI.dialog`. Từ 2026-08-13 **không còn lối vào nào**: `Show Manager` là mục cuối
+cùng mở nó và đã bỏ theo yêu cầu (§4). Ứng viên xoá rõ ràng nhất trong repo — 11 file
+`ui/` cộng `dims.rb` — nhưng chưa xoá: `load_test.rb` còn gate
+`DimsUI.show_dialog`, `scale_tool.rb:72` còn gọi `DimsUI.toggle_active`, và xoá đúng
+thì phải lần cả ba chỗ. Không gấp: code chết không chạy thì không hỏng gì.
 
 **`RotationGripsInMoveTool` = false** trong prefs của máy người dùng — họ tự tắt lúc
 đi tìm dòng chữ đỏ ở mục dưới, không liên quan plugin. Chưa bật lại.

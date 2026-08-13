@@ -1,7 +1,6 @@
 module TRINH_VAN_PHUC::HTU_ScalePlus
   # Builds the context menu shown when right-clicking a dimension:
   #
-  #   Favorite Dimensions   <- grayed heading, only above saved sizes
   #   45 mm                 <- the saved sizes, checked when one is the current length
   #   200 mm
   #   ---------
@@ -9,7 +8,6 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   #   900 mm (in model)     <- sizes this component is already built at elsewhere
   #   ---------
   #   Open list...          add, delete, delete all -- all in one window
-  #   Show Manager          the older Vue dimension manager
   #   Text size  >          Small / Medium / Large
   #
   # With nothing saved yet, the saved block is replaced by two suggestions:
@@ -25,11 +23,22 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   # does each job better, because a native menu closes on the first pick and so
   # every added or deleted value cost a fresh trip through the menu.
   #
-  # Everything else here is Curic Scale++ 1.1.2's own menu. The half/double
-  # suggestions, both headings, Referenced Dimensions and Show Manager were
-  # dropped while this file was being written and are back: on a fresh install the
-  # suggestions were the ONLY thing the menu offered, and Show Manager was the
-  # only way to open the Vue manager, which still ships.
+  # Two of the original's items are gone by request, not by accident:
+  #
+  #   "Favorite Dimensions" -- a grayed heading over the first block. The block is
+  #   the top of the menu and the sizes are what the menu is for, so the label was
+  #   an unclickable row explaining the obvious. "Referenced Dimensions" stays,
+  #   because it is what tells the second block apart from the first.
+  #
+  #   "Show Manager" -- opened the old Vue dimension dialog. "Open list..." above
+  #   it does the same job in a window built for it. Nothing else opens DimsUI now,
+  #   so that dialog is unreachable while it still ships; observer.rb's calls into
+  #   it are no-ops with no dialog to refresh.
+  #
+  # Everything else here is Curic Scale++ 1.1.2's own menu, including the
+  # half/double suggestions and Referenced Dimensions -- both were dropped while
+  # this file was being written and are back. On a fresh install the suggestions
+  # are the ONLY thing the menu offers.
   module DimMenu
     def self.build(menu, tool, object, axis, length)
       values = DimFavorites.list(object, axis)
@@ -38,13 +47,11 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
         if values.empty?
           add_suggested_items(menu, tool, axis, length)
         else
-          add_heading(menu, "Favorite Dimensions")
           add_value_items(menu, tool, axis, length, values)
         end
         add_referenced_items(menu, tool, axis, length, values)
         menu.add_separator
         menu.add_item("Open list...") { defer { DimAddDialog.show(object, axis) } }
-        menu.add_item("Show Manager") { DimsUI.show_dialog }
       end
 
       add_text_size_submenu(menu)
@@ -96,8 +103,9 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
     end
 
     # A grayed item standing in for a group label, which is how the original
-    # separated the two blocks. Both are lists of bare lengths, so without the
-    # labels there is nothing to say which is which.
+    # separated the blocks. Only the referenced one uses it now: it comes after a
+    # list of saved sizes that looks exactly like it, so something has to say
+    # where one ends and the other starts.
     def self.add_heading(menu, text)
       item = menu.add_item(text) {}
       menu.set_validation_proc(item) { MF_GRAYED }

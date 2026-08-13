@@ -5,8 +5,10 @@
 #
 #   45 mm / 200 mm / 400 mm
 #   ---------
-#   Add...
-#   Del        >
+#   Referenced Dimensions    (grayed, only when the model has other sizes)
+#   900 mm (in model)
+#   ---------
+#   Open list...
 #   Text size  >
 #
 # DimMenu is handed a menu object and only calls add_item / add_submenu /
@@ -113,48 +115,41 @@ end
 puts "--- populated list ---"
 menu, group = build(%w[45 200 400])
 
-check "a grayed heading names the block of saved sizes" do
-  menu.entries.first == "Favorite Dimensions" &&
-    menu.validations["Favorite Dimensions"].call == MF_GRAYED
-end
-
-check "three saved sizes come under it" do
-  menu.entries[1, 3].all? { |e| e.is_a?(String) } && menu.entries[1, 3].size == 3
+check "the saved sizes are the top of the menu, with no label over them" do
+  menu.entries[0, 3].all? { |e| e.is_a?(String) } &&
+    !menu.labels.include?("Favorite Dimensions")
 end
 
 check "a separator divides the sizes from the actions" do
-  menu.entries[4] == :separator
+  menu.entries[3] == :separator
 end
 
-check "then Open list..., Show Manager, Text size >" do
-  menu.entries[5, 3] == ["Open list...", "Show Manager", "Text size >"]
+check "then Open list..., Text size >" do
+  menu.entries[4, 2] == ["Open list...", "Text size >"]
 end
 
 check "nothing else is on the menu" do
-  menu.entries.size == 8
+  menu.entries.size == 6
 end
 
-# Show Manager was dropped while this file was being written, and it was the ONLY
-# way to open the Vue dimension manager -- which still ships, 11 files of it, and
-# which observer.rb still refreshes on every selection change.
-check "Show Manager opens the Vue manager" do
-  block = menu.blocks["Show Manager"]
-  next false unless block
-
-  before = $SU_CALLS[:dialog_file].size + $SU_CALLS[:dialog].size
-  block.call
-  PLUG::DimsUI.dialog && ($SU_CALLS[:dialog_file].size + $SU_CALLS[:dialog].size) > before
+# Removed on request, 2026-08-13, and pinned so it cannot drift back in: it opened
+# the old Vue dimension manager, and "Open list..." right above it does that job in
+# a window built for it. Consequence worth knowing rather than hiding: DimsUI now
+# has no entry point at all, so those 11 files ship unreachable and observer.rb's
+# refresh calls find no dialog to refresh.
+check "Show Manager is not offered -- Open list... is the one way in" do
+  !menu.labels.include?("Show Manager") && menu.labels.include?("Open list...")
 end
 
 check "every size carries a validation proc for the checkmark" do
-  menu.entries[1, 3].all? { |label| menu.validations.key?(label) }
+  menu.entries[0, 3].all? { |label| menu.validations.key?(label) }
 end
 
 check "the size matching the current length is checked" do
   current = FAV.list(group, "lenx")[1]
   m = RecordingMenu.new
   MENU.build(m, nil, group, "lenx", current)
-  checked = m.entries[1, 3].select do |label|
+  checked = m.entries[0, 3].select do |label|
     proc = m.validations[label]
     proc && proc.call == MF_CHECKED
   end
@@ -173,9 +168,12 @@ end
 
 check "Open list... opens the window on the right object and axis" do
   m, g = build(%w[45 200 400])
+  block = m.blocks["Open list..."]
+  next false unless block
+
   PLUG::DimAddDialog.close
   before = $SU_TIMERS.size
-  m.blocks["Open list..."].call
+  block.call
   $SU_TIMERS[before..-1].to_a.each { |t| t[:proc].call }
   dialog = PLUG::DimAddDialog.dialog
   dialog.visible? && PLUG::DimAddDialog.object.equal?(g) && PLUG::DimAddDialog.axis == "lenx"
@@ -222,12 +220,8 @@ check "picking one resizes to that length" do
   TOOL_SPY.calls.last == [:apply_dim_value, "lenx", 900.0]
 end
 
-check "no Favorite heading over a block that is not there" do
-  !empty.labels.include?("Favorite Dimensions")
-end
-
-check "then the same three actions" do
-  empty.entries[2, 4] == [:separator, "Open list...", "Show Manager", "Text size >"]
+check "then the same two actions" do
+  empty.entries[2, 3] == [:separator, "Open list...", "Text size >"]
 end
 
 # A dimension of zero would suggest 0 and 0, and dividing by it to build the label
@@ -240,10 +234,13 @@ end
 # The callback runs through defer, which touches IS_WIN and UI.start_timer, so a
 # NameError on that path fails the build rather than waiting for a user to click.
 check "no modal box is put up on the way to the window" do
+  block = empty.blocks["Open list..."]
+  next false unless block
+
   PLUG::DimAddDialog.close
   $SU_CALLS[:messagebox].clear
   before = $SU_TIMERS.size
-  empty.blocks["Open list..."].call
+  block.call
   $SU_TIMERS[before..-1].to_a.each { |t| t[:proc].call }
   $SU_CALLS[:messagebox].empty? && PLUG::DimAddDialog.dialog.visible?
 end
