@@ -12,20 +12,30 @@
 # Chỉ in khi có gì đó ĐỔI, nên console không bị ngập. Làm đúng một lần kéo cho một
 # lần chạy rồi chép cả khối ra.
 #
-# ĐÃ SỬA — main.rb#reassert_behavior, gọi từ observer.rb#scale_finished đúng lúc
-# tool_state 1 -> 0. Probe này giờ dùng để XÁC NHẬN trên SketchUp thật, vì cả bộ test
-# đều chạy trên shim. Cần thấy: mask tụt về 0 ngay khi buông, rồi một tick sau quay lại
-# 120 kèm một lần repick tool. Nếu nó nằm ở 0 và không lên lại thì bản sửa không chạy.
+# ĐÃ ĐO XONG, 13/08/2026, SketchUp 2026 — nhánh thứ nhất, một ComponentInstance:
 #
-# Ba khả năng ban đầu vẫn đáng đọc, vì cột defid nói cái mà bản sửa cố tình không phân
-# biệt — đắp lại mask theo `object.definition` đọc mới nên cả ba đều được vá như nhau:
+#   2  mask=120  defid=30360  lock=true   pts=6   state=0   <- bấm XYZ
+#   3  mask=120  defid=30360  lock=true   pts=6   state=1   <- đang kéo
+#   4  mask=0    defid=30360  lock=false  pts=26  state=0   <- buông
 #
-#   mask 120 -> 0, defid GIỮ NGUYÊN
-#       SketchUp xoá mask trên chính definition ấy khi scale xong.
+# defid KHÔNG đổi -> SketchUp xoá no_scale_mask trên đúng cái definition đã đặt, khi cú
+# scale commit. Không phải make_unique (đường đó sẽ làm defid đổi số).
+#
+# ĐÃ SỬA — main.rb#reassert_behavior, gọi từ observer.rb#scale_finished lúc tool_state
+# 1 -> 0. Probe này giờ dùng để xác nhận BẢN VÁ, không phải để tìm nguyên nhân nữa.
+#
+# TRƯỚC KHI CHẠY LẠI: HTU_ScalePlusReload.run. Lần đo ở trên chạy trên bản ĐÃ CÀI trong
+# AppData, chưa có bản vá — probe đo bản đang chạy, không đo repo.
+#
+# Cần thấy: một dòng thứ 5 với mask=120 xuất hiện một tick sau dòng mask=0. Không có
+# dòng đó nghĩa là bản vá không chạy tới.
+#
+# Hai nhánh còn lại chưa đo, và bản vá cố tình vá cả ba như nhau (apply_behavior đọc
+# `object.definition` mới mỗi lần gọi):
 #
 #   mask 120 -> 0, defid ĐỔI
-#       Group bị nhân bản definition mới khi transform (definition dùng chung thì
-#       make_unique), và definition mới mang behavior mặc định.
+#       Vật bị cấp definition mới khi transform (definition dùng chung thì make_unique),
+#       và definition mới mang behavior mặc định.
 #
 #   sel 1 -> 2+  (hoặc cls đổi sang Face/Edge)
 #       Mask còn nguyên; thứ đổi là SELECTION. Lúc đó compute_bounds_for rơi vào

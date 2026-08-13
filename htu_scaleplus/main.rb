@@ -88,17 +88,20 @@ module TRINH_VAN_PHUC::HTU_ScalePlus
   #
   # #apply_behavior only ever ran on a selection CHANGE, and letting go of a grip is
   # not one: the same object stays selected, so nothing looked at the mask again. That
-  # was fine as long as scaling left the mask alone, and it does not. The mask lives on
-  # a ComponentDefinition, and a scale can hand the object a different definition --
-  # transforming a group whose definition is shared makes it unique, and a
-  # made-unique definition carries default behavior, mask 0. Twenty-six handles come
-  # back while the toolbar button still reads XYZ, which is exactly what "khóa trục
-  # xyz đúng, kéo xong số điểm lại nhiều" is.
+  # was fine as long as scaling left the mask alone, and it does not.
   #
-  # Deliberately written so it does not matter WHICH way the mask was lost, because
-  # that is not observable from here -- a cleared mask and a swapped definition look
-  # identical to anything downstream. #apply_behavior reads `object.definition` fresh
-  # every call, so it repairs both alike.
+  # Measured in SketchUp 2026 with dev/htu_mask_probe.rb rather than reasoned, because
+  # reasoning about it was wrong once. On a single ComponentInstance the mask goes 120
+  # -> 0 across the release while the definition's object_id stays the SAME. So
+  # SketchUp clears no_scale_mask on the very definition it was set on, when the scale
+  # commits. This comment used to say make_unique handed the object a fresh definition
+  # carrying default behavior; that would have shown a different id, and it did not.
+  #
+  # Still written so it does not matter which way the mask was lost: #apply_behavior
+  # reads `object.definition` fresh on every call, so a cleared mask and a definition
+  # swapped out from under the object are repaired alike. Keeping that costs nothing,
+  # and one reading on one SketchUp version on one kind of object is not enough to
+  # narrow it.
   #
   # Costs nothing when nothing drifted, which is every drag once this is right:
   # #apply_behavior returns 0 when the selection already carries the mode, and only a

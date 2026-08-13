@@ -381,14 +381,26 @@ nổ quá muộn.
 
 Nguyên nhân cấu trúc: `apply_behavior` **chỉ chạy khi ĐỔI SELECTION**, và buông grip
 không phải đổi selection — vẫn đúng vật đó đang được chọn, nên **không có gì đọc lại
-mask lần nữa**. Điều đó ổn miễn là scale không đụng tới mask, mà nó có đụng: mask nằm
-trên **ComponentDefinition**, và một cú transform lên group có definition dùng chung sẽ
-`make_unique` — vật đi ra khỏi cú kéo với một definition **khác**, mang behavior mặc
-định, mask 0.
+mask lần nữa**. Điều đó ổn miễn là scale không đụng tới mask, mà nó có đụng.
 
-Bản sửa **cố tình không phân biệt** mask bị xoá với definition bị thay: từ chỗ này hai
-thứ đó trông y như nhau, và `apply_behavior` đọc `object.definition` **mới mỗi lần gọi**
-nên vá cả hai như nhau. Ba việc, đúng thứ tự:
+**Đã đo, không phải suy luận** — `dev/htu_mask_probe.rb` trên SketchUp 2026, một
+`ComponentInstance`, `wrap=no`:
+
+```
+2  mask=120  want=120  defid=30360  lock=true   pts=6   state=0   ← bấm XYZ
+3  mask=120  want=120  defid=30360  lock=true   pts=6   state=1   ← đang kéo
+4  mask=0    want=120  defid=30360  lock=false  pts=26  state=0   ← buông
+```
+
+`defid` **không đổi** qua cả bốn dòng → SketchUp **xoá `no_scale_mask` trên đúng cái
+definition đã đặt** khi cú scale commit. Bản đầu của mục này (và comment trong `main.rb`)
+ghi nguyên nhân là `make_unique` cấp cho vật một definition mới mang behavior mặc định —
+**sai, đã sửa**: nếu vậy `defid` phải đổi số, mà nó không đổi.
+
+Bản sửa vẫn **cố tình không phân biệt** hai trường hợp đó: `apply_behavior` đọc
+`object.definition` **mới mỗi lần gọi** nên vá cả hai như nhau, giữ lại không tốn gì, và
+một lần đo trên một phiên bản SketchUp với một loại vật thì chưa loại trừ được đường kia.
+Ba việc, đúng thứ tự:
 
 1. `GroupLock.wrap(model)` trước — selection nhiều vật không có definition riêng để đỡ
    mask, nên với nó thuốc là **cái wrapper**, không phải nước ghi mask. Ghi mask lên
@@ -412,10 +424,13 @@ sống sót cho tới khi thêm check đó).
 khác trong bộ máy mask bị chặn bởi overlay — 6 nút trên menu ghi mask bất kể overlay bật
 hay tắt. Có mutation khoá điều này (dời xuống dưới cổng overlay → 6 check đỏ).
 
-**Chưa chạy trong SketchUp thật.** 9 check trong `behavior_test.rb` và 8 mutation đều
-trên shim, nên chúng chứng minh *logic* đúng chứ **không** chứng minh SketchUp mất mask
-theo đúng cách đã đoán. `dev/htu_mask_probe.rb` là chỗ xác nhận: cột `mask=` phải tụt
-về 0 lúc buông rồi **quay lại 120 một tick sau**, `defid=` nói cách nào đã xảy ra.
+**Nguyên nhân đã đo; bản vá thì chưa.** 9 check trong `behavior_test.rb` và 8 mutation
+đều trên shim. Lần đo ở trên chạy trên bản **đã cài** (`AppData\Roaming\...\Plugins\`),
+tức bản **chưa có** bản vá — nên nó chứng minh *nguyên nhân*, không chứng minh *bản vá
+chạy được*. Muốn xác nhận: `HTU_ScalePlusReload.run` (nó copy từ repo sang bản đã cài
+rồi mới nạp lại — reload bản repo trong khi bản cài đang chạy là cách kinh điển để đuổi
+theo một lỗi đã sửa), rồi chạy lại probe. Cần thấy **một dòng thứ 5** với `mask=120`
+xuất hiện một tick sau dòng `mask=0`. Không có dòng đó nghĩa là bản vá không chạy.
 
 **Orbit / pan / zoom giữa lúc scale không mất gì** — `ScalePP2_ToolsOb::NAVIGATION`
 trong `observer.rb`. SketchUp cài cả ba thứ này thành **tool change**: giữ chuột giữa là

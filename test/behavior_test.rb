@@ -328,6 +328,10 @@ def drag(observer = tools_observer)
   fired
 end
 
+# This is the case that was MEASURED, in SketchUp 2026 with dev/htu_mask_probe.rb: on a
+# single ComponentInstance the mask reads 120 before the release and 0 after it, with
+# the definition's object_id unchanged. SketchUp clears the mask on the definition it
+# was set on.
 check "a mask lost during the drag is put back on release" do
   self.stored = XYZ
   group = component(XYZ)
@@ -337,12 +341,14 @@ check "a mask lost during the drag is put back on release" do
   mask_of(group) == XYZ
 end
 
-# The likeliest way it goes, and the reason the repair reads `object.definition` fresh
-# instead of remembering one: transforming a group whose definition is shared makes
-# that definition unique, and a made-unique definition carries default behavior. The
-# mask was never cleared -- the object is simply holding a different definition now.
-# Indistinguishable from here, and it has to be, because both must be repaired.
-check "a definition swapped out mid-drag is repaired too" do
+# Not measured -- kept because the repair costs nothing extra to make it hold, and one
+# probe reading on one SketchUp version on one kind of object does not rule it out. If
+# a scale ever hands the object a fresh definition instead of clearing the old one
+# (make_unique does exactly that, and this comment once claimed it was the cause), the
+# mask was never cleared and the object is simply holding something else now. The
+# repair reads `object.definition` fresh, so it cannot tell the two apart -- which is
+# what this check is for.
+check "and a definition swapped out mid-drag would be repaired too" do
   self.stored = XYZ
   group = component(XYZ)
   select(group)
